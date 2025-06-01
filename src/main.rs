@@ -1,3 +1,4 @@
+#![allow(unused)]
 use chi::*;
 
 fn header() {
@@ -9,7 +10,7 @@ fn header() {
     let w = "W";
     let chi = "χ";
     let chi_pd = "χ pd";
-    let chi_pd2 = "χ set-pd";
+    let chi_pd2 = "χ set";
     let nodes = "nodes";
     let edges = "edges";
     let avg_node_depth = "n.dp";
@@ -17,10 +18,24 @@ fn header() {
     let inv_avg_node_depth = "in.dp";
     let inv_avg_edge_depth = "ie.dp";
     let normalized_tree_size = "ntsz";
-    eprintln!("{name:>30}  {n:>4}  {nodes:>5} {edges:>5}  {avg_node_depth:>4} {avg_edge_depth:>4} {inv_avg_node_depth:>5} {inv_avg_edge_depth:>5}  {normalized_tree_size:>4}  {r:>4} {delta:>3} {delta_k:>3} {w:>5} {chi:>5} {chi_pd:>5} {chi_pd2:>5}");
+    let stpd_pos_minus = "pos-";
+    let stpd_pos_plus = "pos+";
+    let stpd_lex_minus = "lex-";
+    let stpd_lex_plus = "lex+";
+    let stpd_colex_minus = "clex-";
+    let stpd_colex_plus = "clex+";
+    let stpd_rand = "rand";
+    // {nodes:>5} {edges:>5}  \
+    // {avg_node_depth:>4} {avg_edge_depth:>4} {inv_avg_node_depth:>5} {inv_avg_edge_depth:>5}  {normalized_tree_size:>4}  \
+    eprintln!("{name:>30}  {n:>4}  \
+{r:>4} {delta:>3} {delta_k:>3} {w:>5} {chi:>5} {chi_pd:>5} {chi_pd2:>5}  \
+{stpd_pos_minus:>5} {stpd_pos_plus:>5} {stpd_lex_minus:>5} {stpd_lex_plus:>5} {stpd_colex_minus:>5} {stpd_colex_plus:>5} {stpd_rand:>5}");
 }
 
 fn stats((name, t): &(String, T), print: bool) {
+    if print {
+        eprintln!("T: {}", crate::print(t));
+    }
     let n = t.len();
     let sa = &sa(t);
     let lcp = &lcp(t, sa);
@@ -55,15 +70,31 @@ fn stats((name, t): &(String, T), print: bool) {
     let bwt = &bwt(t, sa);
     let r = r(bwt);
     let (delta, delta_k) = delta(t);
+    let delta = delta as usize;
     let w = w(t, sa, lcp);
-    let chi = chi(t, sa, lcp, print);
+    let chi = chi(t, sa, lcp, print && false);
     let chi_pd = chi_pd(t, sa, lcp);
     let chi_pd2 = chi_pd2(t, sa, lcp);
 
-    eprintln!("{name:>30}  {n:>4}  {nodes:>5} {edges:>5}  {avg_node_depth:>4} {avg_edge_depth:>4} {inv_avg_node_depth:>5} {inv_avg_edge_depth:>5}  {normalized_tree_size:>4}  {r:>4} {delta:>3.0} {delta_k:>3} {w:>5} {chi:>5} {chi_pd:>5} {chi_pd2:>5}");
+    let stpd_pos_minus = stpd_pos_minus(t, sa, lcp);
+    let stpd_pos_plus = stpd_pos_plus(t, sa, lcp);
+    let stpd_lex_minus = stpd_lex_minus(t, sa, lcp);
+    let stpd_lex_plus = stpd_lex_plus(t, sa, lcp);
+    let stpd_colex_minus = stpd_colex_minus(t, sa, lcp);
+    let stpd_colex_plus = stpd_colex_plus(t, sa, lcp);
+    let stpd_rand = stpd_rand(t, sa, lcp);
+
+    // {nodes:>5} {edges:>5}  \
+    // {avg_node_depth:>4} {avg_edge_depth:>4} {inv_avg_node_depth:>5} {inv_avg_edge_depth:>5}  {normalized_tree_size:>4}  \
+    eprintln!("{name:>30}  {n:>4}  \
+{r:>4} {delta:>3} {delta_k:>3} {w:>5} {chi:>5} {chi_pd:>5} {chi_pd2:>5}  \
+{stpd_pos_minus:>5} {stpd_pos_plus:>5} {stpd_lex_minus:>5} {stpd_lex_plus:>5} {stpd_colex_minus:>5} {stpd_colex_plus:>5} {stpd_rand:>5}");
 }
 
 fn main() {
+    // stats(&terminate(fib(6)), true);
+    // return;
+
     header();
     use chi::strings::*;
     let texts = [
@@ -71,9 +102,17 @@ fn main() {
         variants(fib(15)),
         vec![thue_morse(10)],
         vec![random(1000, 2)],
-        vec![random(1000, 4)],
+        vec![relative(500, 2, 2, 0.05)],
+        vec![relative(250, 2, 4, 0.05)],
         vec![relative(100, 2, 10, 0.05)],
+        vec![relative(50, 2, 20, 0.05)],
+        vec![relative(25, 2, 40, 0.05)],
+        vec![random(1000, 4)],
+        vec![relative(500, 4, 2, 0.05)],
+        vec![relative(250, 4, 4, 0.05)],
         vec![relative(100, 4, 10, 0.05)],
+        vec![relative(50, 4, 20, 0.05)],
+        vec![relative(25, 4, 40, 0.05)],
     ]
     .concat();
     for t in texts {
