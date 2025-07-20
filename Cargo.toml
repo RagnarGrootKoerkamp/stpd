@@ -1,8 +1,13 @@
 [package]
-name = "chi"
+name = "text-indexing"
 version = "0.1.0"
 edition = "2024"
 
+[profile.release]
+debug = true
+
 [dependencies]
 itertools = "0.14.0"
+packed-seq = "2.0.0"
 rand = "0.9.1"
+simd-minimizers = "1.1.0"

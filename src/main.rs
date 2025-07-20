@@ -1,5 +1,7 @@
 #![allow(unused)]
 use chi::*;
+use text_indexing::strings::*;
+use text_indexing::{test::Test, *};
 
 fn header() {
     let name = "name";
@@ -113,6 +115,15 @@ fn main() {
         vec![relative(100, 4, 10, 0.05)],
         vec![relative(50, 4, 20, 0.05)],
         vec![relative(25, 4, 40, 0.05)],
+        // vec![
+        //     repeated.clone(),
+        //     u8_minimizers(repeated.clone(), 1),
+        //     u8_minimizers(repeated.clone(), 2),
+        //     u8_minimizers(repeated.clone(), 4),
+        //     u8_minimizers(repeated.clone(), 8),
+        //     u8_minimizers(repeated.clone(), 16),
+        //     u8_minimizers(repeated.clone(), 32),
+        // ],
     ]
     .concat();
     for t in texts {

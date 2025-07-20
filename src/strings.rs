@@ -1,5 +1,6 @@
 use crate::T;
 use itertools::Itertools;
+use packed_seq::{AsciiSeqVec, Seq, SeqVec};
 use rand::seq::IteratorRandom;
 
 pub fn random(n: usize, sigma: u8) -> (String, T) {
@@ -10,7 +11,7 @@ pub fn random(n: usize, sigma: u8) -> (String, T) {
 
 pub fn relative(n: usize, sigma: u8, copies: usize, r: f32) -> (String, T) {
     let reference = (0..n).map(|_| rand::random_range(1..=sigma)).collect_vec();
-    let mutations = (n as f32 * r) as usize;
+    let mutations = (n as f32 * r).ceil() as usize;
     let mut t = vec![];
     for _ in 0..copies {
         let mut copy = reference.clone();
@@ -84,4 +85,31 @@ pub fn variants(t: (String, T)) -> Vec<(String, T)> {
         terminate(flip(rev(t.clone()))),
         // flip(rev(t.clone())),
     ]
+}
+
+pub fn u8_minimizers((n, t): (String, T), w: usize) -> (String, T) {
+    let n = format!("u8mini({n}, w={w})");
+
+    // eprintln!("t: {t:?}");
+
+    // convert from 1234 to ACTG
+    // skip the final 0 (=$), and append a 0 at the end of the minimizers instead
+    let t = AsciiSeqVec::from_ascii(
+        &t[..t.len() - 1]
+            .iter()
+            .map(|x| b"ACGT"[*x as usize - 1])
+            .collect::<Vec<_>>(),
+    );
+    // eprintln!("t: {t:?}");
+
+    let k = 4;
+    let mut poss = vec![];
+    simd_minimizers::minimizer_positions(t.as_slice(), k, w, &mut poss);
+
+    let mut minimizers: Vec<u8> = poss
+        .into_iter()
+        .map(|i| t.slice(i as usize..i as usize + k).to_word() as u8)
+        .collect();
+    minimizers.push(0);
+    (n, minimizers)
 }
