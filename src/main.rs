@@ -1,5 +1,5 @@
 #![allow(unused)]
-use chi::*;
+
 use text_indexing::strings::*;
 use text_indexing::{test::Test, *};
 
@@ -9,6 +9,7 @@ fn header() {
     let r = "r";
     let delta = "δ";
     let delta_k = "δₖ";
+    let delta_lg = "δlg(n/δ)";
     let w = "W";
     let chi = "χ";
     let chi_pd = "χ pd";
@@ -27,10 +28,11 @@ fn header() {
     let stpd_colex_minus = "clex-";
     let stpd_colex_plus = "clex+";
     let stpd_rand = "rand";
+    let plcp = "plcp";
     // {nodes:>5} {edges:>5}  \
     // {avg_node_depth:>4} {avg_edge_depth:>4} {inv_avg_node_depth:>5} {inv_avg_edge_depth:>5}  {normalized_tree_size:>4}  \
-    eprintln!("{name:>30}  {n:>4}  \
-{r:>4} {delta:>3} {delta_k:>3} {w:>5} {chi:>5} {chi_pd:>5} {chi_pd2:>5}  \
+    eprintln!("{name:>40}  {n:>4}  \
+{r:>4} {delta:>3} {delta_k:>3} {w:>5} {chi:>5} {chi_pd:>5} {chi_pd2:>5}  {delta_lg:>8} \
 {stpd_pos_minus:>5} {stpd_pos_plus:>5} {stpd_lex_minus:>5} {stpd_lex_plus:>5} {stpd_colex_minus:>5} {stpd_colex_plus:>5} {stpd_rand:>5}");
 }
 
@@ -131,4 +133,12 @@ fn main() {
     }
 
     // stats(&random(1000, 2), true);
+}
+
+fn newtest() {
+    // let t = b"0100101001001010010100100101001001$".as_slice();
+    let t = b"01001010$".as_slice();
+    // let t = random(100, 2).1;
+    Test::new(&t);
+    eprintln!("{}", print(&t));
 }

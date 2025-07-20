@@ -4,6 +4,7 @@ use itertools::Itertools;
 use rand::{rng, seq::SliceRandom};
 
 pub mod strings;
+pub mod test;
 
 pub type T = Vec<u8>;
 pub type SA = Vec<usize>;
