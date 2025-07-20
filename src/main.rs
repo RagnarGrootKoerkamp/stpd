@@ -72,51 +72,77 @@ fn stats((name, t): &(String, T), print: bool) {
     let normalized_tree_size = tree_size / n;
 
     let bwt = &bwt(t, sa);
+    // eprintln!("A");
     let r = r(bwt);
+    // eprintln!("B");
+    // slow
     let (delta, delta_k) = delta(t);
+    // eprintln!("C");
+    let delta_lg = (delta * (n as f32 / delta).log2()) as usize;
+    // eprintln!("D");
     let delta = delta as usize;
+    // eprintln!("E");
     let w = w(t, sa, lcp);
+    // eprintln!("F");
     let chi = chi(t, sa, lcp, print && false);
+    // eprintln!("G");
     let chi_pd = chi_pd(t, sa, lcp);
+    // eprintln!("H");
     let chi_pd2 = chi_pd2(t, sa, lcp);
+    // eprintln!("I");
+    // slow
 
     let stpd_pos_minus = stpd_pos_minus(t, sa, lcp);
-    let stpd_pos_plus = stpd_pos_plus(t, sa, lcp);
-    let stpd_lex_minus = stpd_lex_minus(t, sa, lcp);
-    let stpd_lex_plus = stpd_lex_plus(t, sa, lcp);
+    // eprintln!("J");
+    let stpd_pos_plus = 0; //stpd_pos_plus(t, sa, lcp);
+                           // eprintln!("K");
+    let stpd_lex_minus = 0; //stpd_lex_minus(t, sa, lcp);
+                            // eprintln!("L");
+    let stpd_lex_plus = 0; //stpd_lex_plus(t, sa, lcp);
+                           // eprintln!("M");
     let stpd_colex_minus = stpd_colex_minus(t, sa, lcp);
-    let stpd_colex_plus = stpd_colex_plus(t, sa, lcp);
+    // eprintln!("N");
+    let stpd_colex_plus = 0; //stpd_colex_plus(t, sa, lcp);
+                             // eprintln!("O");
     let stpd_rand = stpd_rand(t, sa, lcp);
+    // eprintln!("P");
+
+    let plcp = plcp(t, sa, lcp);
 
     // {nodes:>5} {edges:>5}  \
     // {avg_node_depth:>4} {avg_edge_depth:>4} {inv_avg_node_depth:>5} {inv_avg_edge_depth:>5}  {normalized_tree_size:>4}  \
-    eprintln!("{name:>30}  {n:>4}  \
-{r:>4} {delta:>3} {delta_k:>3} {w:>5} {chi:>5} {chi_pd:>5} {chi_pd2:>5}  \
+    eprintln!("{name:>40}  {n:>4}  \
+{r:>4} {delta:>3} {delta_k:>3} {w:>5} {chi:>5} {chi_pd:>5} {chi_pd2:>5}  {delta_lg:>8} \
 {stpd_pos_minus:>5} {stpd_pos_plus:>5} {stpd_lex_minus:>5} {stpd_lex_plus:>5} {stpd_colex_minus:>5} {stpd_colex_plus:>5} {stpd_rand:>5}");
 }
 
 fn main() {
+    // newtest();
+
+    // return;
+
     // stats(&terminate(fib(6)), true);
     // return;
 
     header();
-    use chi::strings::*;
+    let repeated = relative(200, 4, 20, 0.05);
     let texts = [
-        // variants(fib(6)),
-        variants(fib(15)),
-        vec![thue_morse(10)],
-        vec![random(1000, 2)],
-        vec![relative(500, 2, 2, 0.05)],
-        vec![relative(250, 2, 4, 0.05)],
-        vec![relative(100, 2, 10, 0.05)],
-        vec![relative(50, 2, 20, 0.05)],
-        vec![relative(25, 2, 40, 0.05)],
-        vec![random(1000, 4)],
-        vec![relative(500, 4, 2, 0.05)],
-        vec![relative(250, 4, 4, 0.05)],
-        vec![relative(100, 4, 10, 0.05)],
-        vec![relative(50, 4, 20, 0.05)],
-        vec![relative(25, 4, 40, 0.05)],
+        // variants(fib(15)),
+        vec![
+            // thue_morse(10),
+            // random(1000, 2),
+            // relative(500, 2, 2, 0.05),
+            // relative(250, 2, 4, 0.05),
+            // relative(100, 2, 10, 0.05),
+            // relative(50, 2, 20, 0.05),
+            // relative(25, 2, 40, 0.05),
+            // random(1000, 4),
+            // relative(500, 4, 2, 0.05),
+            // relative(250, 4, 4, 0.05),
+            relative(50, 4, 8, 0.02),
+            // relative(50, 4, 20, 0.05),
+            // relative(25, 4, 40, 0.05),
+        ],
         // vec![
         //     repeated.clone(),
         //     u8_minimizers(repeated.clone(), 1),

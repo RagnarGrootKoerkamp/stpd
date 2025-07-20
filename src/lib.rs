@@ -276,7 +276,7 @@ pub fn stpd(t: &T, _sa: &SA, _lcp: &LCP, perm: &Vec<usize>) -> usize {
         iperm[perm[i]] = i;
     }
     let mut seen = HashSet::new();
-    let mut sampled = HashSet::new();
+    let mut sampled: HashMap<usize, (usize, usize)> = HashMap::new();
 
     for len in 1..=t.len(){
         for &pos in &iperm {
@@ -286,12 +286,25 @@ pub fn stpd(t: &T, _sa: &SA, _lcp: &LCP, perm: &Vec<usize>) -> usize {
             if seen.contains(e) {
                 continue;
             }
-            sampled.insert(pos);
+
             for end in pos+1..=t.len(){
                 seen.insert(&t[start..end]);
             }
+
+            match sampled.entry(pos) {
+                std::collections::hash_map::Entry::Occupied(mut e) => {
+                    e.get_mut().1 = len;
+                },
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    e.insert((len, len));
+                }
+            }
         }
     }
+
+    let mut sampled = sampled.into_iter().collect_vec();
+    sampled.sort_unstable();
+    println!("{sampled:?}");
     sampled.len()
 }
 
@@ -344,4 +357,18 @@ pub fn stpd_rand(t: &T, sa: &SA, lcp: &LCP) -> usize {
     let mut perm = (0..t.len()).collect_vec();
     perm.shuffle(&mut rng());
     stpd(t, sa, lcp, &perm)
+}
+
+pub fn plcp(t: &T, sa: &SA, lcp: &LCP) -> usize {
+    let mut plcp = vec![0; t.len()];
+    for i in 0..t.len(){
+        plcp[sa[i]] = lcp[i];
+    }
+    let mut r = 1;
+    for (&x, &y) in plcp.iter().tuple_windows() {
+        if x != y+1 {
+            r += 1;
+        }
+    }
+    r
 }
