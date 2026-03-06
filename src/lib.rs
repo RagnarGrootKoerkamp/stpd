@@ -5,6 +5,7 @@ use rand::{rng, seq::SliceRandom};
 
 pub mod strings;
 pub mod test;
+pub mod stpd;
 
 pub type T = Vec<u8>;
 pub type SA = Vec<usize>;
