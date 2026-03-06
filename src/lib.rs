@@ -275,36 +275,70 @@ pub fn stpd(t: &T, _sa: &SA, _lcp: &LCP, perm: &Vec<usize>) -> usize {
     for i in 0..t.len(){
         iperm[perm[i]] = i;
     }
-    let mut seen = HashSet::new();
-    let mut sampled: HashMap<usize, (usize, usize)> = HashMap::new();
+    // Map substrings to (sampled STPD pos, end)
+    let mut seen = HashMap::<&[u8], (usize,usize)>::new();
+
+    // Map sampled STPD pos to (min length, max length, children, parents, suffix links)
+    let mut sampled = HashMap::<usize, (usize, usize, HashSet<usize>, Vec<(usize,usize)>, Vec<(usize, usize)>)>::new();
+
+    let mut branch_points = HashSet::new();
+    let mut parents = HashSet::new();
+    // let mut suffix_links = HashSet::new();
 
     for len in 1..=t.len(){
         for &pos in &iperm {
             if pos < len-1 {continue;}
             let start = pos-len+1;
             let e = &t[start..=pos];
-            if seen.contains(e) {
+            if seen.contains_key(e) {
                 continue;
             }
 
-            for end in pos+1..=t.len(){
-                seen.insert(&t[start..end]);
-            }
+            // Add STPD element.
+            let e = sampled.entry(pos).or_insert((len, len, Default::default(), vec![], Default::default()));
+            // Update max len at current sample.
+            e.1 = len;
 
-            match sampled.entry(pos) {
-                std::collections::hash_map::Entry::Occupied(mut e) => {
-                    e.get_mut().1 = len;
-                },
-                std::collections::hash_map::Entry::Vacant(e) => {
-                    e.insert((len, len));
+            let mut last_sl = usize::MAX;
+            let mut cnt = 0;
+            for end in pos+1..=t.len(){
+                // Mark seqs starting here as seen.
+                seen.insert(&t[start..end], (pos, end));
+
+                // Add suffix links.
+                if let Some(&(parent_pos, _parent_end)) = seen.get(&t[start+1..end]) {
+                    if parent_pos != last_sl && end-1 != pos {
+                        // Add suffix link to parent.
+                        e.4.push((end-1, parent_pos));
+                        cnt += 1;
+                        // Add suffix link to parent.
+                        // suffix_links.insert();
+                    }
+                        last_sl = parent_pos;
                 }
             }
+            assert!(cnt <= 2, "CNT: {cnt} at {pos}");
+
+            if let Some((parent_pos, parent_end)) = seen.get(&t[start..pos]) {
+                // Add parent of this sample.
+                e.3.push((len-1, *parent_pos));
+                parents.insert((pos, *parent_pos));
+
+                // Add this as child of previous sample.
+                sampled.get_mut(parent_pos).unwrap().2.insert(parent_end+1);
+                branch_points.insert(parent_end+1);
+            }
+
         }
     }
 
     let mut sampled = sampled.into_iter().collect_vec();
-    sampled.sort_unstable();
+    sampled.sort_unstable_by_key(|(pos, _)| *pos);
     println!("{sampled:?}");
+    eprintln!("STPD samples:  {:?}", sampled.len());
+    eprintln!("Branch points: {:?}", branch_points.len());
+    eprintln!("Parents:       {:?}", parents.len());
+    // eprintln!("Suffix links:  {:?}", suffix_links.len());
     sampled.len()
 }
 
