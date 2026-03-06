@@ -35,6 +35,7 @@ def plot_samples(samples, d=False):
         xs = [x[0] for x in sample]
         ymins = [x[1][0] for x in sample]
         ymaxs = [x[1][1] for x in sample]
+        childs = [x[1][2] for x in sample]
 
         # ymax stats
         stats(ymins)
@@ -44,41 +45,93 @@ def plot_samples(samples, d=False):
         # For each x, plot a line between ymin and ymax
         lines = []
         lines2 = []
-        for j, (x, ymin, ymax) in enumerate(zip(xs, ymins, ymaxs)):
+        ends = []
+        parents = []
+        suffix_links = []
+        for j, (x, ymin, ymax, childs) in enumerate(zip(xs, ymins, ymaxs, childs)):
             # x = x + i / len(samples) * 3
             lines.append([(x - ymin + 1, j), (x - ymax, j)])
             if ymax > 7:
                 lines2.append([(x, j), (x, j + 4)])
+            for jj in childs:
+                ends.append((jj, j))
+
+            last_parent_pos = -1
+            for l, parent_pos in sample[j][1][3]:
+                if parent_pos != last_parent_pos:
+                    parents.append((x - l, j))
+                    last_parent_pos = parent_pos
+
+            last_suffix_link_pos = -1
+            for end, suffix_link_pos in sample[j][1][4]:
+                if suffix_link_pos != last_suffix_link_pos:
+                    suffix_links.append((end, j))
+                    last_suffix_link_pos = suffix_link_pos
+
+        print("STPD size", len(sample))
+        print("Childs", len(ends))
+        print("unique childs", len(set(e[0] for e in ends)))
+
         # Next colour of the default colour cycle
         icolor = plt.rcParams["axes.prop_cycle"].by_key()["color"][i]
         lc = mc.LineCollection(lines, alpha=0.5, color=icolor, lw=2)
         lc2 = mc.LineCollection(lines2, alpha=0.5, color="black", lw=0.5)
-        if i == 0 or True:
-            ax.add_collection(lc)
-            ax.add_collection(lc2)
+        ax.add_collection(lc)
+        ax.add_collection(lc2)
 
-            # ax2.plot(
-            #     xs,
-            #     ymins,
-            #     marker="o",
-            #     linestyle="None",
-            #     color=icolor,
-            #     alpha=0.5,
-            #     label=name,
-            #     markersize=5,
-            # )
-            # ax2.plot(
-            #     xs,
-            #     ymaxs,
-            #     marker="o",
-            #     linestyle="None",
-            #     color=icolor,
-            #     alpha=0.5,
-            #     label=name,
-            #     markersize=5,
-            # )
+        # Children
+        ax.scatter(
+            [e[0] for e in ends],
+            [e[1] for e in ends],
+            alpha=0.5,
+            color=icolor,
+            linestyle="None",
+            marker="x",
+        )
+
+        # Parents
+        ax.scatter(
+            [e[0] for e in parents],
+            [e[1] for e in parents],
+            alpha=0.5,
+            color=icolor,
+            linestyle="None",
+            marker="s",
+        )
+
+        # Suffix links
+        ax.scatter(
+            [e[0] for e in suffix_links],
+            [e[1] for e in suffix_links],
+            alpha=0.5,
+            color=icolor,
+            linestyle="None",
+            marker="+",
+        )
+
+        # ax2.plot(
+        #     xs,
+        #     ymins,
+        #     marker="o",
+        #     linestyle="None",
+        #     color=icolor,
+        #     alpha=0.5,
+        #     label=name,
+        #     markersize=5,
+        # )
+        # ax2.plot(
+        #     xs,
+        #     ymaxs,
+        #     marker="o",
+        #     linestyle="None",
+        #     color=icolor,
+        #     alpha=0.5,
+        #     label=name,
+        #     markersize=5,
+        # )
         # ax2.autoscale()
 
+        # STPD
         ax.plot(
             xs,
             range(len(xs)),
