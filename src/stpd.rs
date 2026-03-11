@@ -40,8 +40,8 @@ struct Anchor {
     /// The position in the text (before `pos`) where the leftmost occurrence of `text[pos-min_len+1..pos]` ends.
     /// Note this this position may or may not corresponds to an RME.
     suffix_pos: usize,
-    /// The index in `spa` of the anchor for the suffix.
-    suffix_anchor_idx: usize,
+    /// The position in the text (before `suffix_pos`) where the leftmost occurrence of `text[pos-min_len+1..pos]` is anchored.
+    suffix_anchor_pos: usize,
 }
 
 impl Stpd {
@@ -73,7 +73,7 @@ impl Stpd {
     }
 
     /// Return the leftmost sampled RME matching q, if it exists.
-    fn search_rme(&self, q: &[u8]) -> Option<&Anchor> {
+    fn search_anchor(&self, q: &[u8]) -> Option<&Anchor> {
         assert!(!q.is_empty());
         let range = self.binary_search(q);
         if range.is_empty() {
@@ -123,7 +123,7 @@ impl Stpd {
             }
 
             // q[..i] does not occur at `pos`, so is either an RME or does not occur at all.
-            let Some(new_anchor) = self.search_rme(&q[..=i]) else {
+            let Some(new_anchor) = self.search_anchor(&q[..=i]) else {
                 break;
             };
             anchor = new_anchor;
@@ -185,7 +185,9 @@ impl Stpd {
             // The range of text matched by the suffix link.
             matched = anchor.suffix_pos - anchor.min_len + 1..anchor.suffix_pos;
             // The suffix link anchor.
-            anchor = &self.spa[anchor.suffix_anchor_idx];
+            anchor = self
+                .search_anchor(&self.text[matched.start..anchor.suffix_anchor_pos])
+                .unwrap();
             // Extend the match as much as possible.
             (matched, anchor) = self.extend(target, matched, anchor);
             assert_eq!(&self.text[matched.clone()], &target[..matched.len()]);
