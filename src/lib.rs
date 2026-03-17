@@ -1,4 +1,4 @@
-#![feature(gen_blocks)]
+#![feature(gen_blocks, bstr)]
 use std::{cmp::{Ordering, Reverse}, collections::{HashMap, HashSet}};
 use itertools::Itertools;
 use rand::{rng, seq::SliceRandom};

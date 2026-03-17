@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, ops::Range};
+use std::{bstr::ByteString, cmp::Ordering, ops::Range};
 
 use itertools::Itertools;
 
@@ -6,7 +6,7 @@ use itertools::Itertools;
 pub struct Stpd {
     /// The input text.
     // TODO: Relative LZ encoding.
-    text: Vec<u8>,
+    text: ByteString,
     /// STPD samples, covering all left-most occurrences of all right-maximal extensions.
     /// Sorted in co-lex order.
     /// spa: sampled prefix array
@@ -42,6 +42,7 @@ pub struct Anchor {
     /// Note this this position may or may not corresponds to an RME.
     suffix_pos: usize,
     /// The position in the text (before `suffix_pos`) where the leftmost occurrence of `text[pos-min_len+1..pos]` is anchored.
+    /// *Not* the index in `STPD::spa` of the anchor itself, since this can change over time.
     suffix_anchor_pos: usize,
 }
 
@@ -52,18 +53,18 @@ impl Stpd {
         // 3.
 
         let mut stpd = Self {
-            text,
+            text: ByteString(text),
             spa: vec![Anchor {
                 pos: 0,
                 min_len: 0,
                 max_len: 0,
-                suffix_pos: usize::MAX,
-                suffix_anchor_pos: usize::MAX,
+                suffix_pos: 0,
+                suffix_anchor_pos: 0,
             }],
         };
-        log::info!("New");
 
         let text = &stpd.text;
+        log::info!("New for text {text:?}");
 
         // The substring `text[pos-seen_before.len()..pos]` was seen before at `text[seen_before]`.
         // Also, `text[pos-seen_before.len()-1..pos]` was *not* seen before.
@@ -76,8 +77,13 @@ impl Stpd {
             // Append text[pos].
             let c = text[pos];
             log::info!(
-                "Push {c}. Seen before: text[{seen_before:?}]={:?} with anchor {anchor_idx}",
+                "Pos {pos} Push {}. Seen before: text[{seen_before:?}]={:?} with anchor {anchor_idx}",
+                c as char,
                 &text[seen_before.clone()]
+            );
+            assert_eq!(
+                text[seen_before.clone()],
+                text[pos - seen_before.len()..pos]
             );
 
             let extended = &text[pos - seen_before.len()..=pos];
@@ -94,13 +100,13 @@ impl Stpd {
 
             // Search prefix array for match with additional character.
             if let Some((anchor, sb)) = stpd.search_anchor(extended) {
-                log::info!("Found via binary search.");
+                log::info!("Found match of {extended:?} via binary search at {sb:?}.");
                 anchor_idx = stpd.spa.element_offset(anchor).unwrap();
                 seen_before = sb;
-                log::info!("New anchor {anchor_idx} with seen_before={seen_before:?}");
+                log::info!("New anchor {anchor_idx}");
                 assert_eq!(
                     &text[seen_before.clone()],
-                    &text[pos - seen_before.len()..pos]
+                    &text[pos - seen_before.len() + 1..=pos]
                 );
                 continue;
             }
@@ -109,7 +115,7 @@ impl Stpd {
 
             // This is the first occurrence of `extended`, so we add an anchor for it.
             let mut new_anchor = Anchor {
-                pos,
+                pos: pos + 1,
                 max_len: extended.len(),
                 // TODO
                 min_len: usize::MAX,
@@ -120,11 +126,15 @@ impl Stpd {
             // TODO: Repeatedly take suffix links to find the min_len, ie the length of the shortest suffix
             // for which the just pushed character is the anchor.
             let mut anchor = &stpd.spa[anchor_idx];
-            loop {
+            while seen_before.len() > 0 {
                 // Seen before is one less than that.
                 // Take suffix link of the anchor.
                 (anchor, seen_before) = stpd.suffix_link(seen_before, anchor);
                 anchor_idx = stpd.spa.element_offset(anchor).unwrap();
+                assert_eq!(
+                    text[seen_before.clone()],
+                    text[pos - seen_before.len()..pos]
+                );
 
                 // If we can extend the suffix match with the right character, we update `seen_before` and are done.
                 if text[seen_before.end] == c {
@@ -135,14 +145,15 @@ impl Stpd {
 
                 // Otherwise, we might be able to find an existing RME anchor.
                 let suffix = &text[pos - seen_before.len()..=pos];
+                log::info!("Binary search for suffix {suffix:?}",);
                 if let Some((a, sb)) = stpd.search_anchor(suffix) {
-                    log::info!("Found previous occurrence via binary search.");
+                    log::info!("Found previous occurrence via binary search at {sb:?} {a:?}.");
                     anchor = a;
                     seen_before = sb;
                     anchor_idx = stpd.spa.element_offset(anchor).unwrap();
                     assert_eq!(
                         &text[seen_before.clone()],
-                        &text[pos - seen_before.len()..pos]
+                        &text[pos + 1 - seen_before.len()..=pos]
                     );
                     break;
                 }
@@ -159,11 +170,24 @@ impl Stpd {
             log::info!("New anchor {new_anchor:?}");
 
             // Insert anchor
-            let pos_range = stpd.binary_search(&text[..pos]);
+            let pos_range = stpd.binary_search(&text[..=pos]);
             assert_eq!(pos_range.start, pos_range.end);
-            log::info!("Insert new anchor at position {}", pos_range.start);
-            stpd.spa.insert(pos_range.start, new_anchor);
+            let insert_idx = pos_range.start;
+            log::info!(
+                "Insert anchor #{} at position {}",
+                stpd.spa.len(),
+                insert_idx
+            );
+            stpd.spa.insert(insert_idx, new_anchor);
+            if insert_idx <= anchor_idx {
+                log::info!(
+                    "Inserted before current anchor idx; updating that to {}",
+                    anchor_idx + 1
+                );
+                anchor_idx += 1;
+            }
         }
+        log::info!("Num anchors: {}", stpd.spa.len());
         stpd
     }
 
@@ -189,7 +213,6 @@ impl Stpd {
 
     /// Return the leftmost sampled RME matching q and the matching range, if it exists.
     fn search_anchor(&self, q: &[u8]) -> Option<(&Anchor, Range<usize>)> {
-        assert!(!q.is_empty());
         let range = self.binary_search(q);
         if range.is_empty() {
             return None;
@@ -203,6 +226,7 @@ impl Stpd {
                 .unwrap();
         let anchor = &self.spa[rme_index];
         let range = anchor.pos - q.len()..anchor.pos;
+        assert_eq!(&self.text[range.clone()], q);
         Some((anchor, range))
     }
 
@@ -290,8 +314,9 @@ impl Stpd {
         mut matched: Range<usize>,
         mut anchor: &'s Anchor,
     ) -> (&'s Anchor, Range<usize>) {
+        assert!(matched.len() > 0);
         let mut target = &self.text[matched.clone()];
-        log::info!("Suffix link of: matched={matched:?} anchor={anchor:?} target={target:?}");
+        log::info!("Suffix link of: matched={matched:?} target={target:?} {anchor:?} ");
 
         loop {
             // anchor itself is in the range
@@ -301,25 +326,43 @@ impl Stpd {
                 anchor.pos - anchor.max_len <= matched.start
                     && matched.start <= anchor.pos - anchor.min_len
             );
-            // Shrink the target to the next suffix-link length.
-            target = &target[(anchor.pos - anchor.min_len + 1) - matched.start..];
-            // The range of text matched by the suffix link.
-            matched = anchor.suffix_pos - anchor.min_len + 1..anchor.suffix_pos;
+            // Special case: suffix links of the root anchor go to itself.
+            if anchor.pos == 0 {
+                // Shrink the target to the next suffix-link length.
+                target = &target[1..];
+                // The range of text matched by the suffix link.
+                matched = 0..0;
+            } else {
+                // Shrink the target to the next suffix-link length.
+                target = &target[(anchor.pos + 1 - (anchor.min_len - 0)) - matched.start..];
+                // The range of text matched by the suffix link.
+                matched = anchor.suffix_pos + 1 - (anchor.min_len - 0)..anchor.suffix_pos;
+            }
+            log::info!("Shrink target to {target:?}");
+            log::info!("Updated matched to {matched:?}");
             // The suffix link anchor.
             anchor = self
                 .search_anchor(&self.text[matched.start..anchor.suffix_anchor_pos])
                 .unwrap()
                 .0;
+            log::info!("suffix link anchor {anchor:?}");
             // Extend the match as much as possible.
+            log::info!("Extend {target:?} {matched:?} {anchor:?}");
             (matched, anchor) = self.extend(target, matched, anchor);
+            log::info!("Extend into {matched:?} {anchor:?}");
             assert_eq!(&self.text[matched.clone()], &target[..matched.len()]);
             // If the entire target suffix matched, return it.
             if matched.len() == target.len() {
                 log::info!("Found suffix link: matched={matched:?} anchor={anchor:?}");
                 return (anchor, matched);
             }
+            log::info!(
+                "Current match {matched:?} = {} is not yet full target {target:?}",
+                &self.text[matched.clone()]
+            );
             // Otherwise, shrink the target further.
         }
+        // return (anchor, matched);
     }
 }
 
