@@ -102,7 +102,15 @@ fn stats((name, t): &(String, T), print: bool) {
     // // {stpd_pos_minus:>5} {stpd_pos_plus:>5} {stpd_lex_minus:>5} {stpd_lex_plus:>5} {stpd_colex_minus:>5} {stpd_colex_plus:>5} {stpd_rand:>5}");
 }
 
+fn stpd() {
+    env_logger::init();
+    let t = b"ABABCBACBAABABAABABACBA";
+    stpd::Stpd::new(t.to_vec());
+}
+
 fn main() {
+    return stpd();
+
     // newtest();
 
     // return;
