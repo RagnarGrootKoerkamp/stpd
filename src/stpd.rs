@@ -253,21 +253,20 @@ impl Stpd {
         while l < h {
             let m = (l + h) / 2;
             if cmp(&self.spa[m]) {
-                h = m;
-            } else {
                 l = m + 1;
+            } else {
+                h = m;
             }
         }
         l
     }
 
     /// Find the range of `spa` that has `q` as a suffix.
-    // TODO: Do everything in reverse instead, so we have normal lex comparisons?
     fn binary_search(&self, q: &[u8]) -> Range<usize> {
         let start =
-            self.binary_search_by(|rme| cmp_colex(&self.text[..rme.pos], q) != Ordering::Less);
+            self.binary_search_by(|rme| cmp_colex(&self.text[..rme.pos], q) == Ordering::Less);
         let end =
-            self.binary_search_by(|rme| cmp_colex(&self.text[..rme.pos], q) == Ordering::Greater);
+            self.binary_search_by(|rme| cmp_colex(&self.text[..rme.pos], q) != Ordering::Greater);
         start..end
     }
 
