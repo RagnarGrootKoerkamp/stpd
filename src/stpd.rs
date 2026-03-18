@@ -103,8 +103,9 @@ impl Stpd {
                 continue;
             }
             log::info!(
-                "Pos {pos} Push {}. Seen before: text[{seen_before:?}] with anchor {}",
+                "Pos {pos} Push {}. Seen before: {}=|{seen_before:?}| with anchor {}",
                 c as char,
+                seen_before.len(),
                 self.spa[anchor_idx].pos
             );
 
@@ -164,6 +165,41 @@ impl Stpd {
         self.anchor_idx = anchor_idx;
     }
 
+    fn longest_existing_suffix(
+        &self,
+        seen_before: Range<usize>,
+        anchor_idx: usize,
+        pos: usize,
+    ) -> ((usize, &Anchor), Range<usize>) {
+        #[cfg(not(debug_assertions))]
+        if seen_before.len() > 20 {
+            // self.longest_existing_suffix_via_binary_search(seen_before, anchor_idx, pos)
+            self.longest_existing_suffix_via_exponential_search(seen_before, anchor_idx, pos)
+        } else {
+            self.longest_existing_suffix_via_links(seen_before, anchor_idx, pos)
+        }
+
+        #[cfg(debug_assertions)]
+        {
+            let a = self.longest_existing_suffix_via_binary_search(
+                seen_before.clone(),
+                anchor_idx,
+                pos,
+            );
+            let b = self.longest_existing_suffix_via_links(seen_before.clone(), anchor_idx, pos);
+            let c = self.longest_existing_suffix_via_exponential_search(
+                seen_before.clone(),
+                anchor_idx,
+                pos,
+            );
+            assert_eq!(a.0 .0, b.0 .0);
+            assert_eq!(a.0 .0, c.0 .0);
+            assert_eq!(a.1, b.1);
+            assert_eq!(a.1, c.1);
+            a
+        }
+    }
+
     /// Given that the current suffix occurs before at `seen_before` with the given `anchor_idx`,
     /// find the longest suffix of `text[..=pos]` that occurs before, and its anchor.
     ///
@@ -178,34 +214,93 @@ impl Stpd {
 
         let mut l = 0;
         let mut h = extended.len();
-        log::info!("Binary search for suffix len 0..{h}");
+        log::warn!("Binary search for suffix len 0..{h}");
         while l < h {
             let mid = (l + h + 1) / 2;
+            log::debug!("l {l} mid {mid} h {h}");
             let q = &extended[extended.len() - mid..];
 
-            let found = self.locate_one(q).is_some();
-            if found {
+            if let Some(mut m) = self.locate_one(q) {
+                assert_eq!(m.len(), mid);
+                // Try to extend the match on the left to increase l.
+                debug_assert_eq!(&self.text[m.clone()], q);
                 l = mid;
+                while l + 1 < extended.len() && m.start > 0 {
+                    let c = extended[extended.len() - 1 - l];
+                    if self.text[m.start - 1] != c {
+                        break;
+                    }
+                    l += 1;
+                    m.start -= 1;
+                }
+                assert_eq!(m.len(), l);
+                // assert_eq!(&self.text[m], &extended[extended.len() - l..]);
+                if l > mid {
+                    log::info!("Grow l from {mid} to {l}");
+                }
             } else {
                 h = mid - 1;
             }
         }
+        log::info!("l {l} h {h}");
         let q = &extended[extended.len() - l..];
         let (seen_before, (anchor_idx, anchor)) = self.extend(q, 0..0, 0, &self.spa[0]);
+        assert_eq!(seen_before.len(), q.len());
         ((anchor_idx, anchor), seen_before)
     }
 
-    fn longest_existing_suffix(
+    /// Exponential search version that doubles the prefix length.
+    fn longest_existing_suffix_via_exponential_search(
         &self,
         seen_before: Range<usize>,
-        anchor_idx: usize,
+        _anchor_idx: usize,
         pos: usize,
     ) -> ((usize, &Anchor), Range<usize>) {
-        if seen_before.len() > 20 {
-            self.longest_existing_suffix_via_binary_search(seen_before, anchor_idx, pos)
-        } else {
-            self.longest_existing_suffix_via_links(seen_before, anchor_idx, pos)
+        let extended = &self.text[pos - seen_before.len()..=pos];
+
+        let mut l = 0;
+        let mut h = extended.len();
+        log::warn!("exponential search for suffix len 0..{h}");
+        while l < h {
+            let mid = if 2 * l + 1 < h {
+                if h < 20 {
+                    2 * l + 1
+                } else {
+                    (2 * l + 1).max(7)
+                }
+            } else {
+                (l + h + 1) / 2
+            };
+            log::debug!("l {l} mid {mid} h {h}");
+            let q = &extended[extended.len() - mid..];
+
+            if let Some(mut m) = self.locate_one(q) {
+                assert_eq!(m.len(), mid);
+                // Try to extend the match on the left to increase l.
+                debug_assert_eq!(&self.text[m.clone()], q);
+                l = mid;
+                while l + 1 < extended.len() && m.start > 0 {
+                    let c = extended[extended.len() - 1 - l];
+                    if self.text[m.start - 1] != c {
+                        break;
+                    }
+                    l += 1;
+                    m.start -= 1;
+                }
+                assert_eq!(m.len(), l);
+                // assert_eq!(&self.text[m], &extended[extended.len() - l..]);
+                if l > mid {
+                    log::info!("Grow l from {mid} to {l}");
+                }
+            } else {
+                h = mid - 1;
+            }
         }
+        log::debug!("l {l} h {h}");
+        let q = &extended[extended.len() - l..];
+        let (seen_before, (anchor_idx, anchor)) = self.extend(q, 0..0, 0, &self.spa[0]);
+        assert_eq!(seen_before.len(), q.len());
+        ((anchor_idx, anchor), seen_before)
     }
 
     /// Given that the current suffix occurs before at `seen_before` with the given `anchor_idx`,
@@ -268,7 +363,7 @@ impl Stpd {
         let mut anchor = &self.spa[anchor_idx];
         // TODO: Prune search once it's worse than what we see on the right.
         log::warn!(
-            "Suffix link of {}=|{seen_before:?}| extended by {}",
+            "({pos}) Suffix link of {}=|{seen_before:?}| extended by {}",
             seen_before.len(),
             c as char
         );
@@ -411,8 +506,11 @@ impl Stpd {
 
         let range = pos - i..pos;
         log::info!(
-            "extend |q|={} with {searches} searches from {prefix_match:?} to {range:?} anchored at {}",
-            q.len(), anchor.pos
+            "extend |q|={} with {searches} searches from {}=|{prefix_match:?}| to {}=|{range:?}| anchored at {}",
+            q.len(),
+            prefix_match.len(),
+            range.len(),
+            anchor.pos
         );
         (range, (anchor_idx, anchor))
     }
