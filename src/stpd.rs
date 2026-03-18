@@ -451,13 +451,28 @@ impl Stpd {
 
     /// Return the leftmost sampled RME matching q and the matching range, if it exists.
     fn search_anchor(&self, q: &[u8]) -> Option<((usize, &Anchor), Range<usize>)> {
+        if q.len() <= PREFIX_LEN {
+            let idx = encode(q);
+            let (pos, anchor_pos) = self.prefix_lookup.borrow()[q.len()][idx as usize];
+            if pos > 0 {
+                let range = pos - q.len()..pos;
+                debug_assert_eq!(&self.text[range.clone()], q);
+                let anchor_idx = self.binary_search_by(|rme| {
+                    cmp_colex(&self.text[..rme.pos], &self.text[..anchor_pos]) == Ordering::Less
+                });
+                let anchor = &self.spa[anchor_idx];
+                assert_eq!(anchor.pos, anchor_pos);
+                return Some(((anchor_idx, anchor), range));
+            }
+        }
+
         let range = self.binary_search(q);
         if range.is_empty() {
             return None;
         }
         // Find the smallest index in the range.
         // TODO: O(1) RMQ?
-        if range.len() > 100 {
+        if range.len() > 30 {
             log::warn!("Large range of {} for query len {}", range.len(), q.len());
         }
         let rme_index = range
@@ -467,6 +482,13 @@ impl Stpd {
         let anchor = &self.spa[rme_index];
         let range = anchor.pos - q.len()..anchor.pos;
         debug_assert_eq!(&self.text[range.clone()], q);
+
+        if q.len() <= PREFIX_LEN {
+            let idx = encode(q);
+            log::info!("Save result for {}: {:?}", q.len(), ByteStr::new(q));
+            self.prefix_lookup.borrow_mut()[q.len()][idx as usize] = (anchor.pos, anchor.pos);
+        }
+
         Some(((rme_index, anchor), range))
     }
 
@@ -555,7 +577,7 @@ impl Stpd {
 
             if i <= PREFIX_LEN {
                 let idx = encode(&q[..i]);
-                log::info!("Save prefix of len {i}");
+                log::info!("Save prefix of len {i}: {:?}", ByteStr::new(&q[..i]));
                 self.prefix_lookup.borrow_mut()[i][idx as usize] = (pos, anchor.pos);
             }
         }
