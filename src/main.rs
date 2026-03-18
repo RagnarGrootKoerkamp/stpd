@@ -109,10 +109,14 @@ fn stpd() {
     let t = b"BANANABAANNABBBAAANNANBANANANBANANABANNNAAANABNANNAANABBANNANA";
     // let t = b"AAAAAAAAABAAAAAAA";
     // let t = &[t.as_slice(); 5].concat();
-    let t = &relative(100000, 4, 100, 0.001).1;
+    let t = &relative(1_000_000, 4, 100, 0.001).1;
     // let t = b"BANANABBNNAABBNANAANNABBBAAANNANBANANANBANANABANNNAAANABNANNAANABBANNANAXABBBABABCBANBNANBANANABANAANNANBANABBABANANABNABANNAABBANA";
     // let t = b"AABBCABCBCBB";
     stpd::Stpd::new(t);
+
+    // RopeBWT: 65h for 320 copies of 3.2Gbp => 4.2 Mbp/s  many threads (?)
+    // us:      16s for 100 copies of 1  Mbp => 6.2 Mbp/s  1 thread
+    // us:     410s for 100 copies of 10 Mbp => 2.4 Mbp/s  1 thread
 }
 
 fn main() {
