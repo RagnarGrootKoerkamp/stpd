@@ -230,6 +230,7 @@ impl Stpd {
     /// find the longest suffix of `text[..=pos]` that occurs before, and its anchor.
     ///
     /// This version binary searches the length of the suffix to find the longest that occurs.
+    #[allow(unused)]
     fn longest_existing_suffix_via_binary_search(
         &self,
         seen_before: Range<usize>,
@@ -455,6 +456,12 @@ impl Stpd {
         let mut lcs_r = 0;
 
         let target = encode_suffix(q);
+        let mask = if q.len() == 0 {
+            0
+        } else {
+            (u64::MAX) << 64usize.saturating_sub(2 * q.len())
+        };
+        assert_eq!(target, target & mask);
 
         while l < h {
             let m = (l + h) / 2;
@@ -465,8 +472,19 @@ impl Stpd {
                 // We already know they're equal anyway.
                 return m;
             }
+
+            // TODO: Cleanup/simplify
             let lcs = lcs_l.min(lcs_r);
-            let (lcs2, cmp) = cmp_colex(&self.text[..anchor.pos - lcs], &q[..q.len() - lcs]);
+            let mut lcs2 = 0;
+            let mut cmp;
+            if anchor.pos >= 32 {
+                cmp = (anchor.value & mask).cmp(&target);
+                if cmp == Ordering::Equal && q.len() > 32 {
+                    (lcs2, cmp) = cmp_colex(&self.text[..anchor.pos - lcs], &q[..q.len() - lcs]);
+                }
+            } else {
+                (lcs2, cmp) = cmp_colex(&self.text[..anchor.pos - lcs], &q[..q.len() - lcs]);
+            }
 
             let less = if inclusive {
                 cmp != Ordering::Greater
@@ -798,9 +816,11 @@ fn cmp_colex(text: &[u8], q: &[u8]) -> (usize, Ordering) {
 fn encode(text: &[u8]) -> u64 {
     assert!(text.len() <= usize::BITS as usize / 2);
     text.iter()
+        .rev()
         .fold(0, |acc, &b| acc * 4 + (b as u64 - b'A' as u64))
 }
 
 fn encode_suffix(text: &[u8]) -> u64 {
-    encode(&text[text.len().saturating_sub(usize::BITS as usize / 2)..])
+    let shift = 2 * (32usize.saturating_sub(text.len()));
+    encode(&text[text.len().saturating_sub(usize::BITS as usize / 2)..]) << shift
 }
