@@ -450,6 +450,7 @@ impl Stpd {
 
     /// `inclusive=true` returns the end of the range where `q` matches.
     /// `search_anchor=true` means that we return as soon as the anchor matching `q` is found.
+    #[inline(always)]
     fn binary_search(&self, q: &[u8], inclusive: bool, search_anchor: bool) -> usize {
         if search_anchor {
             assert_eq!(q.as_ptr(), self.text.as_ptr());
@@ -541,6 +542,7 @@ impl Stpd {
             }
         }
 
+        // TODO: Reuse the best match in case of failure.
         let range = self.binary_search_range(q);
         if range.is_empty() {
             log::info!("Search |q|={}: {}=|{range:?}| failed", q.len(), range.len(),);
@@ -765,14 +767,27 @@ impl Stpd {
 }
 
 /// Length of longest common suffix.
+#[inline(always)]
 fn lcs(a: &[u8], b: &[u8]) -> usize {
-    // TODO: u64-based comparisons.
-    let mut i = 0;
-    let min = Ord::min(a.len(), b.len());
-    while i < min && a[a.len() - 1 - i] == b[b.len() - 1 - i] {
-        i += 1;
+    let min_len = Ord::min(a.len(), b.len());
+    let min = min_len / 8 * 8;
+    for i in (0..min).step_by(8) {
+        let text_chunk = read_u64(a, a.len() - i);
+        let q_chunk = read_u64(b, b.len() - i);
+        if text_chunk != q_chunk {
+            let diff = text_chunk ^ q_chunk;
+            let lcs = i + diff.leading_zeros() as usize / 8;
+            return lcs;
+        }
     }
-    return i;
+    let text_chunk = read_last_u64(a, a.len() - min, min_len - min);
+    let q_chunk = read_last_u64(b, b.len() - min, min_len - min);
+    if text_chunk != q_chunk {
+        let diff = text_chunk ^ q_chunk;
+        let lcs = min + diff.leading_zeros() as usize / 8;
+        return lcs;
+    }
+    min_len
 }
 
 /// Read u64 ending at position i >= 8.
