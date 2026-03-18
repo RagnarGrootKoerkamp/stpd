@@ -42,11 +42,11 @@ pub struct Anchor {
     /// but this is *not* the first occurrence of `text[pos-min_len+1..pos]`,
     /// i.e., `s[1..]A` has a previous occurrence.
     min_len: usize,
-    /// The length of the longest `sA` such that `sA` is an RME.
-    /// Adding one extra character on the left will already be 'anchored' elsewhere.
-    /// That is, `text[pos-max_len..pos-1]` is not leftmost here, but
-    /// `text[pos-max_len-1..pos-1]` (and longer) _are_ leftmost here.
-    max_len: usize,
+    // /// The length of the longest `sA` such that `sA` is an RME.
+    // /// Adding one extra character on the left will already be 'anchored' elsewhere.
+    // /// That is, `text[pos-max_len..pos-1]` is not leftmost here, but
+    // /// `text[pos-max_len-1..pos-1]` (and longer) _are_ leftmost here.
+    // max_len: usize,
     /// The position in the text (before `pos`) where the leftmost occurrence of `text[pos-min_len+1..pos]` ends.
     /// Note this this position may or may not corresponds to an RME.
     suffix_pos: usize,
@@ -63,7 +63,7 @@ impl Stpd {
             spa: vec![Anchor {
                 pos: 0,
                 min_len: 0,
-                max_len: 0,
+                // max_len: 0,
                 suffix_pos: 0,
                 suffix_anchor_pos: 0,
             }],
@@ -125,7 +125,7 @@ impl Stpd {
             // This is the first occurrence of `extended`, so we add an anchor for it.
             let mut new_anchor = Anchor {
                 pos: pos + 1,
-                max_len: extended.len(),
+                // max_len: extended.len(),
                 min_len: usize::MAX,
                 suffix_pos: usize::MAX,
                 suffix_anchor_pos: usize::MAX,
@@ -378,8 +378,8 @@ impl Stpd {
             assert!(matched.start <= anchor.pos && anchor.pos <= matched.end);
             // m has the right length to be anchored here
             assert!(
-                anchor.pos - anchor.max_len <= matched.start
-                    && matched.start <= anchor.pos - anchor.min_len
+                // anchor.pos - anchor.max_len <= matched.start &&
+                matched.start <= anchor.pos - anchor.min_len
             );
             // Special case: suffix links of the root anchor go to itself.
             if anchor.pos == 0 {
