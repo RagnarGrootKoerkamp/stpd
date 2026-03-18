@@ -425,16 +425,23 @@ impl Stpd {
         ((anchor_idx, anchor), seen_before)
     }
 
-    /// `cmp`: true when anchor < query.
-    fn binary_search_by(&self, cmp: impl Fn(&Anchor) -> bool) -> usize {
+    /// `cmp`: Takes know LCS, and returns new LCS, and true when anchor < query.
+    fn binary_search_by(&self, cmp: impl Fn(usize, &Anchor) -> (usize, bool)) -> usize {
         let mut l = 0;
         let mut h = self.spa.len();
+        let mut lcs_l = 0;
+        let mut lcs_r = 0;
         while l < h {
             let m = (l + h) / 2;
-            if cmp(&self.spa[m]) {
+            // log::info!("Binary search: l {l} m {m} h {h} lcs_l {lcs_l} lcs_r {lcs_r}");
+            let (lcs, less) = cmp(lcs_l.min(lcs_r), &self.spa[m]);
+            // log::info!("Lcs: {lcs} less: {less}");
+            if less {
                 l = m + 1;
+                lcs_l = lcs;
             } else {
                 h = m;
+                lcs_r = lcs;
             }
         }
         l
@@ -442,10 +449,16 @@ impl Stpd {
 
     /// Find the range of `spa` that has `q` as a suffix.
     fn binary_search(&self, q: &[u8]) -> Range<usize> {
-        let start =
-            self.binary_search_by(|rme| cmp_colex(&self.text[..rme.pos], q) == Ordering::Less);
-        let end =
-            self.binary_search_by(|rme| cmp_colex(&self.text[..rme.pos], q) != Ordering::Greater);
+        let start = self.binary_search_by(|lcs, rme| {
+            debug_assert_eq!(&self.text[rme.pos - lcs..rme.pos], &q[q.len() - lcs..]);
+            let (lcs2, cmp) = cmp_colex(&self.text[..rme.pos - lcs], &q[..q.len() - lcs]);
+            (lcs + lcs2, cmp == Ordering::Less)
+        });
+        let end = self.binary_search_by(|lcs, rme| {
+            debug_assert_eq!(&self.text[rme.pos - lcs..rme.pos], &q[q.len() - lcs..]);
+            let (lcs2, cmp) = cmp_colex(&self.text[..rme.pos - lcs], &q[..q.len() - lcs]);
+            (lcs + lcs2, cmp != Ordering::Greater)
+        });
         start..end
     }
 
@@ -457,8 +470,14 @@ impl Stpd {
             if pos > 0 {
                 let range = pos - q.len()..pos;
                 debug_assert_eq!(&self.text[range.clone()], q);
-                let anchor_idx = self.binary_search_by(|rme| {
-                    cmp_colex(&self.text[..rme.pos], &self.text[..anchor_pos]) == Ordering::Less
+                let anchor_idx = self.binary_search_by(|lcs, rme| {
+                    debug_assert_eq!(
+                        &self.text[rme.pos - lcs..rme.pos],
+                        &self.text[anchor_pos - lcs..anchor_pos]
+                    );
+                    let (lcs2, cmp) =
+                        cmp_colex(&self.text[..rme.pos - lcs], &self.text[..anchor_pos - lcs]);
+                    (lcs + lcs2, cmp == Ordering::Less)
                 });
                 let anchor = &self.spa[anchor_idx];
                 assert_eq!(anchor.pos, anchor_pos);
@@ -533,8 +552,15 @@ impl Stpd {
                     q.len()
                 );
                 prefix_match = new_prefix_match;
-                anchor_idx = self.binary_search_by(|rme| {
-                    cmp_colex(&self.text[..rme.pos], &self.text[..anchor_pos]) == Ordering::Less
+                // HOT: 20% of time is here.
+                anchor_idx = self.binary_search_by(|lcs, rme| {
+                    debug_assert_eq!(
+                        &self.text[rme.pos - lcs..rme.pos],
+                        &self.text[anchor_pos - lcs..anchor_pos]
+                    );
+                    let (lcs2, cmp) =
+                        cmp_colex(&self.text[..rme.pos - lcs], &self.text[..anchor_pos - lcs]);
+                    (lcs + lcs2, cmp == Ordering::Less)
                 });
                 anchor = &self.spa[anchor_idx];
                 assert_eq!(anchor.pos, anchor_pos);
@@ -714,26 +740,30 @@ fn read_last_u64(text: &[u8], i: usize, len: usize) -> u64 {
 
 /// co-lex compare q with a text prefix.
 /// Returns `Equal` when `q` is a suffix of `text`.
-fn cmp_colex(text: &[u8], q: &[u8]) -> Ordering {
+fn cmp_colex(text: &[u8], q: &[u8]) -> (usize, Ordering) {
     let min_len = Ord::min(text.len(), q.len());
     let min = min_len / 8 * 8;
     for i in (0..min).step_by(8) {
         let text_chunk = read_u64(text, text.len() - i);
         let q_chunk = read_u64(q, q.len() - i);
         if text_chunk != q_chunk {
-            return Ord::cmp(&text_chunk, &q_chunk);
+            let diff = text_chunk ^ q_chunk;
+            let lcs = i + diff.leading_zeros() as usize / 8;
+            return (lcs, Ord::cmp(&text_chunk, &q_chunk));
         }
     }
     let text_chunk = read_last_u64(text, text.len() - min, min_len - min);
     let q_chunk = read_last_u64(q, q.len() - min, min_len - min);
     if text_chunk != q_chunk {
-        return Ord::cmp(&text_chunk, &q_chunk);
+        let diff = text_chunk ^ q_chunk;
+        let lcs = min + diff.leading_zeros() as usize / 8;
+        return (lcs, Ord::cmp(&text_chunk, &q_chunk));
     }
     if min_len == q.len() {
-        return Ordering::Equal;
+        return (min_len, Ordering::Equal);
     }
     if min_len == text.len() {
-        return Ordering::Less;
+        return (min_len, Ordering::Less);
     }
     unreachable!();
 }
