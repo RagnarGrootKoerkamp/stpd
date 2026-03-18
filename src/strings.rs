@@ -110,7 +110,7 @@ pub fn u8_minimizers((n, t): (String, T), w: usize) -> (String, T) {
 
     let mut minimizers: Vec<u8> = poss
         .into_iter()
-        .map(|i| t.slice(i as usize..i as usize + k).to_word() as u8)
+        .map(|i| t.slice(i as usize..i as usize + k).as_u64() as u8)
         .collect();
     minimizers.push(0);
     (n, minimizers)
