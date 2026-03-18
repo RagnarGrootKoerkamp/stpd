@@ -1,5 +1,6 @@
 use std::{
     bstr::{ByteStr, ByteString},
+    cell::RefCell,
     cmp::{Ordering, Reverse},
     ops::Range,
 };
@@ -22,7 +23,13 @@ pub struct Stpd {
     seen_before: Range<usize>,
     /// The anchor index of `text[seen_before]`.
     anchor_idx: usize,
+
+    /// Cache for extend queries
+    /// For each length k, a list of length 4^k of (text pos, anchor pos) where each k-mer matches leftmost.
+    prefix_lookup: RefCell<Vec<Vec<(usize, usize)>>>,
 }
+
+const PREFIX_LEN: usize = 7;
 
 /// A right maximal extension is a substring sA of T such that s occurs at least twice in the text.
 /// We do path compression, which means that the A only sampled if `sA` is
@@ -63,6 +70,9 @@ impl Stpd {
             spa: tiered_vector::Vector::new(),
             seen_before: 0..0,
             anchor_idx: 0,
+            prefix_lookup: RefCell::new(Vec::from_fn(PREFIX_LEN + 1, |i| {
+                vec![(0, 0); 1 << (2 * i)]
+            })),
         };
         stpd.spa.push(Anchor {
             pos: 0,
@@ -263,10 +273,10 @@ impl Stpd {
         log::warn!("exponential search for suffix len 0..{h}");
         while l < h {
             let mid = if 2 * l + 1 < h {
-                if h < 20 {
-                    2 * l + 1
+                if PREFIX_LEN < h {
+                    (2 * l + 1).max(PREFIX_LEN)
                 } else {
-                    (2 * l + 1).max(7)
+                    2 * l + 1
                 }
             } else {
                 (l + h + 1) / 2
@@ -447,6 +457,9 @@ impl Stpd {
         }
         // Find the smallest index in the range.
         // TODO: O(1) RMQ?
+        if range.len() > 100 {
+            log::warn!("Large range of {} for query len {}", range.len(), q.len());
+        }
         let rme_index = range
             .into_iter()
             .min_by_key(|idx| self.spa[*idx].pos)
@@ -473,26 +486,63 @@ impl Stpd {
     pub fn extend<'s>(
         &'s self,
         q: &[u8],
-        prefix_match: Range<usize>,
+        mut prefix_match: Range<usize>,
         mut anchor_idx: usize,
         mut anchor: &'s Anchor,
     ) -> (Range<usize>, (usize, &'s Anchor)) {
         debug_assert_eq!(self.text[prefix_match.clone()], q[..prefix_match.len()]);
         assert!(prefix_match.start <= anchor.pos && anchor.pos <= prefix_match.end);
 
+        // Nothing to do?
+        if prefix_match.len() == q.len() {
+            return (prefix_match, (anchor_idx, anchor));
+        }
+
+        // Use the prefix lookup when possible.
+        if prefix_match.len() < PREFIX_LEN {
+            let prefix_len = q.len().min(PREFIX_LEN);
+            let prefix = &q[..prefix_len];
+            let idx = encode(prefix);
+            let (pos, anchor_pos) = self.prefix_lookup.borrow()[prefix_len][idx as usize];
+            if pos > 0 {
+                let new_prefix_match = pos - prefix_len..pos;
+                log::info!(
+                    "Use prefix of len {prefix_len} for query len {} matching at {prefix_match:?} now at {new_prefix_match:?}",
+                    q.len()
+                );
+                prefix_match = new_prefix_match;
+                anchor_idx = self.binary_search_by(|rme| {
+                    cmp_colex(&self.text[..rme.pos], &self.text[..anchor_pos]) == Ordering::Less
+                });
+                anchor = &self.spa[anchor_idx];
+                assert_eq!(anchor.pos, anchor_pos);
+                debug_assert_eq!(&self.text[prefix_match.clone()], &q[..prefix_len]);
+
+                // Already done?
+                if prefix_match.len() == q.len() {
+                    return (prefix_match, (anchor_idx, anchor));
+                }
+            }
+        }
+
         // Number of matched characters of q.
         let mut i = prefix_match.len();
         // *End* position of leftmost occurrence in text of q[..i].
         let mut pos = prefix_match.end;
-        let mut searches = 0;
+        let mut searches = vec![];
         while i < q.len() {
             if unsafe { *self.text.get_unchecked(pos) } == q[i] {
                 i += 1;
                 pos += 1;
+
+                if i <= PREFIX_LEN {
+                    let idx = encode(&q[..i]);
+                    self.prefix_lookup.borrow_mut()[i][idx as usize] = (pos, anchor.pos);
+                }
                 continue;
             }
 
-            searches += 1;
+            searches.push(i);
 
             // q[..i] does not occur at `pos`, so is either an RME or does not occur at all.
             let Some(((new_anchor_idx, new_anchor), _)) = self.search_anchor(&q[..=i]) else {
@@ -502,12 +552,19 @@ impl Stpd {
             anchor = new_anchor;
             pos = anchor.pos;
             i += 1;
+
+            if i <= PREFIX_LEN {
+                let idx = encode(&q[..i]);
+                log::info!("Save prefix of len {i}");
+                self.prefix_lookup.borrow_mut()[i][idx as usize] = (pos, anchor.pos);
+            }
         }
 
         let range = pos - i..pos;
         log::info!(
-            "extend |q|={} with {searches} searches from {}=|{prefix_match:?}| to {}=|{range:?}| anchored at {}",
+            "extend |q|={} with {}=|{searches:?}| searches from {}=|{prefix_match:?}| to {}=|{range:?}| anchored at {}",
             q.len(),
+            searches.len(),
             prefix_match.len(),
             range.len(),
             anchor.pos
@@ -657,4 +714,10 @@ fn cmp_colex(text: &[u8], q: &[u8]) -> Ordering {
         return Ordering::Less;
     }
     unreachable!();
+}
+
+fn encode(text: &[u8]) -> usize {
+    assert!(text.len() <= usize::BITS as usize / 2);
+    text.iter()
+        .fold(0, |acc, &b| acc * 4 + (b as usize - b'A' as usize))
 }
