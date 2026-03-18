@@ -443,22 +443,37 @@ impl Stpd {
     }
 
     /// `inclusive=true` returns the end of the range where `q` matches.
-    fn binary_search(&self, q: &[u8], inclusive: bool) -> usize {
+    /// `search_anchor=true` means that we return as soon as the anchor matching `q` is found.
+    fn binary_search(&self, q: &[u8], inclusive: bool, search_anchor: bool) -> usize {
+        if search_anchor {
+            assert_eq!(q.as_ptr(), self.text.as_ptr());
+        }
+        assert!(!(inclusive && search_anchor));
         let mut l = 0;
         let mut h = self.spa.len();
         let mut lcs_l = 0;
         let mut lcs_r = 0;
+
+        let target = encode_suffix(q);
+
         while l < h {
             let m = (l + h) / 2;
             // log::info!("Binary search: l {l} m {m} h {h} lcs_l {lcs_l} lcs_r {lcs_r}");
             let anchor = &self.spa[m];
+            if search_anchor && anchor.pos == q.len() {
+                // Comparing against the query itself is wasteful.
+                // We already know they're equal anyway.
+                return m;
+            }
             let lcs = lcs_l.min(lcs_r);
             let (lcs2, cmp) = cmp_colex(&self.text[..anchor.pos - lcs], &q[..q.len() - lcs]);
-            if if inclusive {
+
+            let less = if inclusive {
                 cmp != Ordering::Greater
             } else {
                 cmp == Ordering::Less
-            } {
+            };
+            if less {
                 l = m + 1;
                 lcs_l = lcs + lcs2;
             } else {
@@ -471,9 +486,26 @@ impl Stpd {
 
     /// Find the range of `spa` that has `q` as a suffix.
     fn binary_search_range(&self, q: &[u8]) -> Range<usize> {
-        let start = self.binary_search(q, false);
-        let end = self.binary_search(q, true);
+        let start = self.binary_search(q, false, false);
+        let end = self.binary_search(q, true, false);
         start..end
+    }
+
+    /// We already know the position of the anchor for q.
+    /// We just have to binary search for it.
+    fn get_anchor(
+        &self,
+        q: &[u8],
+        pos: usize,
+        anchor_pos: usize,
+    ) -> ((usize, &Anchor), Range<usize>) {
+        let range = pos - q.len()..pos;
+        debug_assert_eq!(&self.text[range.clone()], q);
+        // We know the anchor is unique for this range.
+        let anchor_idx = self.binary_search(&self.text[..anchor_pos], false, true);
+        let anchor = &self.spa[anchor_idx];
+        assert_eq!(anchor.pos, anchor_pos);
+        ((anchor_idx, anchor), range)
     }
 
     /// Return the leftmost sampled RME matching q and the matching range, if it exists.
@@ -482,12 +514,7 @@ impl Stpd {
             let idx = encode(q);
             let (pos, anchor_pos) = self.prefix_lookup.borrow()[q.len()][idx as usize];
             if pos > 0 {
-                let range = pos - q.len()..pos;
-                debug_assert_eq!(&self.text[range.clone()], q);
-                let anchor_idx = self.binary_search(&self.text[..anchor_pos], false);
-                let anchor = &self.spa[anchor_idx];
-                assert_eq!(anchor.pos, anchor_pos);
-                return Some(((anchor_idx, anchor), range));
+                return Some(self.get_anchor(q, pos, anchor_pos));
             }
         }
 
@@ -559,17 +586,12 @@ impl Stpd {
             let idx = encode(prefix);
             let (pos, anchor_pos) = self.prefix_lookup.borrow()[prefix_len][idx as usize];
             if pos > 0 {
-                let new_prefix_match = pos - prefix_len..pos;
-                log::info!(
-                    "Use prefix of len {prefix_len} for query len {} matching at {prefix_match:?} now at {new_prefix_match:?}",
-                    q.len()
-                );
-                prefix_match = new_prefix_match;
                 // HOT: 20% of time is here.
-                anchor_idx = self.binary_search(&self.text[..anchor_pos], false);
-                anchor = &self.spa[anchor_idx];
-                assert_eq!(anchor.pos, anchor_pos);
-                debug_assert_eq!(&self.text[prefix_match.clone()], &q[..prefix_len]);
+                ((anchor_idx, anchor), prefix_match) = self.get_anchor(prefix, pos, anchor_pos);
+                log::info!(
+                    "Len {prefix_len} lookup: {}=|{prefix_match:?}| with anchor {anchor:?}",
+                    prefix_match.len()
+                );
 
                 // Already done?
                 if prefix_match.len() == q.len() {
