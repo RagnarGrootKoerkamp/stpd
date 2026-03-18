@@ -91,7 +91,7 @@ impl Stpd {
                 c as char,
                 &text[seen_before.clone()]
             );
-            assert_eq!(
+            debug_assert_eq!(
                 text[seen_before.clone()],
                 text[pos - seen_before.len()..pos]
             );
@@ -114,7 +114,7 @@ impl Stpd {
                 anchor_idx = ai;
                 seen_before = sb;
                 log::info!("New anchor {anchor_idx}");
-                assert_eq!(
+                debug_assert_eq!(
                     &text[seen_before.clone()],
                     &text[pos - seen_before.len() + 1..=pos]
                 );
@@ -177,7 +177,7 @@ impl Stpd {
                 // Seen before is one less than that.
                 // Take suffix link of the anchor.
                 ((anchor_idx, anchor), seen_before) = self.suffix_link(seen_before, anchor);
-                assert_eq!(
+                debug_assert_eq!(
                     text[seen_before.clone()],
                     text[pos - seen_before.len()..pos]
                 );
@@ -197,7 +197,7 @@ impl Stpd {
                     anchor_idx = ai;
                     anchor = a;
                     seen_before = sb;
-                    assert_eq!(
+                    debug_assert_eq!(
                         &text[seen_before.clone()],
                         &text[pos + 1 - seen_before.len()..=pos]
                     );
@@ -284,7 +284,7 @@ impl Stpd {
             .unwrap();
         let anchor = &self.spa[rme_index];
         let range = anchor.pos - q.len()..anchor.pos;
-        assert_eq!(&self.text[range.clone()], q);
+        debug_assert_eq!(&self.text[range.clone()], q);
         Some(((rme_index, anchor), range))
     }
 
@@ -308,7 +308,7 @@ impl Stpd {
         mut anchor_idx: usize,
         mut anchor: &'s Anchor,
     ) -> (Range<usize>, (usize, &'s Anchor)) {
-        assert_eq!(self.text[prefix_match.clone()], q[..prefix_match.len()]);
+        debug_assert_eq!(self.text[prefix_match.clone()], q[..prefix_match.len()]);
         assert!(prefix_match.start <= anchor.pos && anchor.pos <= prefix_match.end);
 
         // Number of matched characters of q.
@@ -412,7 +412,7 @@ impl Stpd {
             log::info!("Extend {target:?} {matched:?} {anchor:?}");
             (matched, (anchor_idx, anchor)) = self.extend(target, matched, anchor_idx, anchor);
             log::info!("Extend into {matched:?} {anchor:?}");
-            assert_eq!(&self.text[matched.clone()], &target[..matched.len()]);
+            debug_assert_eq!(&self.text[matched.clone()], &target[..matched.len()]);
             // If the entire target suffix matched, return it.
             if matched.len() == target.len() {
                 log::info!("Found suffix link: matched={matched:?} anchor={anchor:?}");
