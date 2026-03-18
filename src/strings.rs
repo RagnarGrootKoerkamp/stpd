@@ -10,13 +10,15 @@ pub fn random(n: usize, sigma: u8) -> (String, T) {
 }
 
 pub fn relative(n: usize, sigma: u8, copies: usize, r: f32) -> (String, T) {
-    let reference = (0..n).map(|_| rand::random_range(1..=sigma)).collect_vec();
+    let reference = (0..n)
+        .map(|_| b'A' + rand::random_range(0..sigma))
+        .collect_vec();
     let mutations = (n as f32 * r).ceil() as usize;
     let mut t = vec![];
     for _ in 0..copies {
         let mut copy = reference.clone();
         for i in (0..n).choose_multiple(&mut rand::rng(), mutations) {
-            let mut c = rand::random_range(1..=sigma - 1);
+            let mut c = b'A' + rand::random_range(0..sigma - 1);
             if c >= copy[i] {
                 c += 1;
             }
@@ -24,7 +26,7 @@ pub fn relative(n: usize, sigma: u8, copies: usize, r: f32) -> (String, T) {
         }
         t.extend(copy);
     }
-    t.push(0);
+    // t.push(0);
     (format!("relative({copies}*{n}@{r},{sigma})"), t)
 }
 

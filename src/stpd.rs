@@ -1,4 +1,8 @@
-use std::{bstr::ByteString, cmp::Ordering, ops::Range};
+use std::{
+    bstr::{ByteStr, ByteString},
+    cmp::{Ordering, Reverse},
+    ops::Range,
+};
 
 use itertools::Itertools;
 
@@ -14,6 +18,11 @@ pub struct Stpd {
     // TODO: BTree instead so we can insert samples.
     // TODO: Efficient range min.
     spa: Vec<Anchor>,
+
+    /// The longest suffix `text[pos-seen_before.len()..pos]` that was seen before at `text[seen_before]`.
+    seen_before: Range<usize>,
+    /// The anchor index of `text[seen_before]`.
+    anchor_idx: usize,
 }
 
 /// A right maximal extension is a substring sA of T such that s occurs at least twice in the text.
@@ -47,13 +56,10 @@ pub struct Anchor {
 }
 
 impl Stpd {
-    pub fn new(text: Vec<u8>) -> Self {
-        // 1. Build SA
-        // 2. Iterate text left to right, and mark samples as needed.
-        // 3.
-
+    pub fn new(text: &[u8]) -> Self {
+        log::info!("NEW");
         let mut stpd = Self {
-            text: ByteString(text),
+            text: ByteString(vec![]),
             spa: vec![Anchor {
                 pos: 0,
                 min_len: 0,
@@ -61,22 +67,25 @@ impl Stpd {
                 suffix_pos: 0,
                 suffix_anchor_pos: 0,
             }],
+            seen_before: 0..0,
+            anchor_idx: 0,
         };
+        stpd.push(text);
+        stpd
+    }
+    pub fn push(&mut self, text: &[u8]) {
+        log::warn!("Push {}", ByteStr::new(text));
+        let old_len = self.text.len();
+        self.text.extend_from_slice(text);
+        let text = &self.text;
 
-        let text = &stpd.text;
-        log::info!("New for text {text:?}");
-
-        // The substring `text[pos-seen_before.len()..pos]` was seen before at `text[seen_before]`.
-        // Also, `text[pos-seen_before.len()-1..pos]` was *not* seen before.
-        // `seen_before.end < pos`.
-        let mut seen_before = 0..0;
-        // The anchor of `text[seen_before]`.
-        let mut anchor_idx = 0;
-
-        for pos in 1..text.len() {
+        let mut seen_before = self.seen_before.clone();
+        let mut anchor_idx = self.anchor_idx;
+        // No need to create an anchor for the first character.
+        for pos in old_len.max(1)..text.len() {
             // Append text[pos].
             let c = text[pos];
-            log::info!(
+            log::warn!(
                 "Pos {pos} Push {}. Seen before: text[{seen_before:?}]={:?} with anchor {anchor_idx}",
                 c as char,
                 &text[seen_before.clone()]
@@ -99,9 +108,9 @@ impl Stpd {
             }
 
             // Search prefix array for match with additional character.
-            if let Some((anchor, sb)) = stpd.search_anchor(extended) {
+            if let Some((anchor, sb)) = self.search_anchor(extended) {
                 log::info!("Found match of {extended:?} via binary search at {sb:?}.");
-                anchor_idx = stpd.spa.element_offset(anchor).unwrap();
+                anchor_idx = self.spa.element_offset(anchor).unwrap();
                 seen_before = sb;
                 log::info!("New anchor {anchor_idx}");
                 assert_eq!(
@@ -117,20 +126,57 @@ impl Stpd {
             let mut new_anchor = Anchor {
                 pos: pos + 1,
                 max_len: extended.len(),
-                // TODO
                 min_len: usize::MAX,
                 suffix_pos: usize::MAX,
                 suffix_anchor_pos: usize::MAX,
             };
 
-            // TODO: Repeatedly take suffix links to find the min_len, ie the length of the shortest suffix
+            // Suppose the existing longest seen before suffix is ABCDEF and it matches
+            // around some anchor as ABC.DEF.
+            // We want to find whether there is a previous occurrence of ABCDEFG, and if not, the longest suffix for which there is.
+            // 3 options for the leftmost longest suffix match:
+            // 1) at the current anchor. => The new suffix is not an RME and already handled above.
+            // 2) right of the anchor. The G will be sampled as an RME, and we find it via binary search.
+            // 3) left of the anchor. We find it by repeated suffix-link and extend.
+
+            // 2) Find the longest match in the prefix array.
+            let range = self.binary_search(&self.text[..=pos]);
+            assert!(range.is_empty());
+            // Test the strings before and after.
+            // Find all that have the maximal LCS length, and of those, report the leftmost.
+            let mut max_lcs = (0, Reverse(usize::MAX), 0); // (lcs length, text index, anchor idx)
+
+            let mut i = range.start;
+            while i > 0 {
+                i -= 1;
+                let lcs_len = lcs(&self.text[..self.spa[i].pos], extended);
+                if lcs_len < max_lcs.0 {
+                    break;
+                }
+                max_lcs = max_lcs.max((lcs_len, Reverse(self.spa[i].pos), i));
+            }
+            i = range.start;
+            while i < self.spa.len() {
+                let lcs_len = lcs(&self.text[..self.spa[i].pos], extended);
+                if lcs_len < max_lcs.0 {
+                    break;
+                }
+                max_lcs = max_lcs.max((lcs_len, Reverse(self.spa[i].pos), i));
+                i += 1;
+            }
+            let right_anchor_idx = max_lcs.2;
+            let right_anchor = &self.spa[right_anchor_idx];
+            let right_seen_before = right_anchor.pos - max_lcs.0..right_anchor.pos;
+
+            // 3) Repeatedly take suffix links to find the min_len, ie the length of the shortest suffix
             // for which the just pushed character is the anchor.
-            let mut anchor = &stpd.spa[anchor_idx];
+            let mut anchor = &self.spa[anchor_idx];
+            // TODO: Prune search once it's worse than what we see on the right.
             while seen_before.len() > 0 {
                 // Seen before is one less than that.
                 // Take suffix link of the anchor.
-                (anchor, seen_before) = stpd.suffix_link(seen_before, anchor);
-                anchor_idx = stpd.spa.element_offset(anchor).unwrap();
+                (anchor, seen_before) = self.suffix_link(seen_before, anchor);
+                anchor_idx = self.spa.element_offset(anchor).unwrap();
                 assert_eq!(
                     text[seen_before.clone()],
                     text[pos - seen_before.len()..pos]
@@ -146,11 +192,11 @@ impl Stpd {
                 // Otherwise, we might be able to find an existing RME anchor.
                 let suffix = &text[pos - seen_before.len()..=pos];
                 log::info!("Binary search for suffix {suffix:?}",);
-                if let Some((a, sb)) = stpd.search_anchor(suffix) {
+                if let Some((a, sb)) = self.search_anchor(suffix) {
                     log::info!("Found previous occurrence via binary search at {sb:?} {a:?}.");
                     anchor = a;
                     seen_before = sb;
-                    anchor_idx = stpd.spa.element_offset(anchor).unwrap();
+                    anchor_idx = self.spa.element_offset(anchor).unwrap();
                     assert_eq!(
                         &text[seen_before.clone()],
                         &text[pos + 1 - seen_before.len()..=pos]
@@ -162,23 +208,31 @@ impl Stpd {
                 // Otherwise, this suffix cannot be extended with `c`, and we take further suffix links.
             }
 
+            // Take the max of the two options.
+            if right_seen_before.len() > seen_before.len() {
+                log::info!("Found better match on the right.");
+                anchor = right_anchor;
+                seen_before = right_seen_before;
+                anchor_idx = right_anchor_idx;
+            }
+
             // Update anchor
             new_anchor.min_len = seen_before.len() + 1;
             new_anchor.suffix_pos = seen_before.end;
             new_anchor.suffix_anchor_pos = anchor.pos;
 
-            log::info!("New anchor {new_anchor:?}");
+            log::warn!("New anchor {new_anchor:?}");
 
             // Insert anchor
-            let pos_range = stpd.binary_search(&text[..=pos]);
+            let pos_range = self.binary_search(&text[..=pos]);
             assert_eq!(pos_range.start, pos_range.end);
             let insert_idx = pos_range.start;
             log::info!(
                 "Insert anchor #{} at position {}",
-                stpd.spa.len(),
+                self.spa.len(),
                 insert_idx
             );
-            stpd.spa.insert(insert_idx, new_anchor);
+            self.spa.insert(insert_idx, new_anchor);
             if insert_idx <= anchor_idx {
                 log::info!(
                     "Inserted before current anchor idx; updating that to {}",
@@ -187,8 +241,9 @@ impl Stpd {
                 anchor_idx += 1;
             }
         }
-        log::info!("Num anchors: {}", stpd.spa.len());
-        stpd
+        log::error!("Num anchors: {}", self.spa.len());
+        self.seen_before = seen_before;
+        self.anchor_idx = anchor_idx;
     }
 
     /// Find the range of `spa` that has `q` as a suffix.

@@ -104,10 +104,13 @@ fn stats((name, t): &(String, T), print: bool) {
 
 fn stpd() {
     env_logger::init();
-    let t = b"BANANABAANNABBBAAANNANBANANANBANANABANNNAAANABNANNAANABBANNANA";
-    let t = [t.as_slice(); 2].concat();
+    // let t = b"BANANABAANNABBBAAANNANBANANANBANANABANNNAAANABNANNAANABBANNANA";
+    let t = b"AAAAAAAAABAAAAAAA";
+    let t = [t.as_slice(); 1].concat();
+    let t = &relative(1000, 4, 1000, 0.10).1;
     // let t = b"BANANABBNNAABBNANAANNABBBAAANNANBANANANBANANABANNNAAANABNANNAANABBANNANAXABBBABABCBANBNANBANANABANAANNANBANABBABANANABNABANNAABBANA";
-    stpd::Stpd::new(t.to_vec());
+    // let t = b"AABBCABCBCBB";
+    stpd::Stpd::new(t);
 }
 
 fn main() {
