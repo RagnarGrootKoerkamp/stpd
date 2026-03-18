@@ -169,7 +169,7 @@ impl Stpd {
             log::info!("New anchor {new_anchor:?}");
 
             // Insert anchor
-            let pos_range = self.binary_search(&text[..=pos]);
+            let pos_range = self.binary_search_range(&text[..=pos]);
             assert_eq!(pos_range.start, pos_range.end);
             let insert_idx = pos_range.start;
             log::debug!(
@@ -351,7 +351,7 @@ impl Stpd {
         // 3) left of the anchor. We find it by repeated suffix-link and extend.
 
         // 2) Find the longest match in the prefix array.
-        let range = self.binary_search(&self.text[..=pos]);
+        let range = self.binary_search_range(&self.text[..=pos]);
         assert!(range.is_empty());
         // Test the strings before and after.
         // Find all that have the maximal LCS length, and of those, report the leftmost.
@@ -442,8 +442,8 @@ impl Stpd {
         ((anchor_idx, anchor), seen_before)
     }
 
-    /// `cmp`: Takes know LCS, and returns new LCS, and true when anchor < query.
-    fn binary_search_by(&self, cmp: impl Fn(usize, &Anchor) -> (usize, bool)) -> usize {
+    /// `inclusive=true` returns the end of the range where `q` matches.
+    fn binary_search(&self, q: &[u8], inclusive: bool) -> usize {
         let mut l = 0;
         let mut h = self.spa.len();
         let mut lcs_l = 0;
@@ -451,31 +451,28 @@ impl Stpd {
         while l < h {
             let m = (l + h) / 2;
             // log::info!("Binary search: l {l} m {m} h {h} lcs_l {lcs_l} lcs_r {lcs_r}");
-            let (lcs, less) = cmp(lcs_l.min(lcs_r), &self.spa[m]);
-            // log::info!("Lcs: {lcs} less: {less}");
-            if less {
+            let anchor = &self.spa[m];
+            let lcs = lcs_l.min(lcs_r);
+            let (lcs2, cmp) = cmp_colex(&self.text[..anchor.pos - lcs], &q[..q.len() - lcs]);
+            if if inclusive {
+                cmp != Ordering::Greater
+            } else {
+                cmp == Ordering::Less
+            } {
                 l = m + 1;
-                lcs_l = lcs;
+                lcs_l = lcs + lcs2;
             } else {
                 h = m;
-                lcs_r = lcs;
+                lcs_r = lcs + lcs2;
             }
         }
         l
     }
 
     /// Find the range of `spa` that has `q` as a suffix.
-    fn binary_search(&self, q: &[u8]) -> Range<usize> {
-        let start = self.binary_search_by(|lcs, rme| {
-            debug_assert_eq!(&self.text[rme.pos - lcs..rme.pos], &q[q.len() - lcs..]);
-            let (lcs2, cmp) = cmp_colex(&self.text[..rme.pos - lcs], &q[..q.len() - lcs]);
-            (lcs + lcs2, cmp == Ordering::Less)
-        });
-        let end = self.binary_search_by(|lcs, rme| {
-            debug_assert_eq!(&self.text[rme.pos - lcs..rme.pos], &q[q.len() - lcs..]);
-            let (lcs2, cmp) = cmp_colex(&self.text[..rme.pos - lcs], &q[..q.len() - lcs]);
-            (lcs + lcs2, cmp != Ordering::Greater)
-        });
+    fn binary_search_range(&self, q: &[u8]) -> Range<usize> {
+        let start = self.binary_search(q, false);
+        let end = self.binary_search(q, true);
         start..end
     }
 
@@ -487,22 +484,14 @@ impl Stpd {
             if pos > 0 {
                 let range = pos - q.len()..pos;
                 debug_assert_eq!(&self.text[range.clone()], q);
-                let anchor_idx = self.binary_search_by(|lcs, rme| {
-                    debug_assert_eq!(
-                        &self.text[rme.pos - lcs..rme.pos],
-                        &self.text[anchor_pos - lcs..anchor_pos]
-                    );
-                    let (lcs2, cmp) =
-                        cmp_colex(&self.text[..rme.pos - lcs], &self.text[..anchor_pos - lcs]);
-                    (lcs + lcs2, cmp == Ordering::Less)
-                });
+                let anchor_idx = self.binary_search(&self.text[..anchor_pos], false);
                 let anchor = &self.spa[anchor_idx];
                 assert_eq!(anchor.pos, anchor_pos);
                 return Some(((anchor_idx, anchor), range));
             }
         }
 
-        let range = self.binary_search(q);
+        let range = self.binary_search_range(q);
         if range.is_empty() {
             log::info!("Search |q|={}: {}=|{range:?}| failed", q.len(), range.len(),);
             return None;
@@ -577,15 +566,7 @@ impl Stpd {
                 );
                 prefix_match = new_prefix_match;
                 // HOT: 20% of time is here.
-                anchor_idx = self.binary_search_by(|lcs, rme| {
-                    debug_assert_eq!(
-                        &self.text[rme.pos - lcs..rme.pos],
-                        &self.text[anchor_pos - lcs..anchor_pos]
-                    );
-                    let (lcs2, cmp) =
-                        cmp_colex(&self.text[..rme.pos - lcs], &self.text[..anchor_pos - lcs]);
-                    (lcs + lcs2, cmp == Ordering::Less)
-                });
+                anchor_idx = self.binary_search(&self.text[..anchor_pos], false);
                 anchor = &self.spa[anchor_idx];
                 assert_eq!(anchor.pos, anchor_pos);
                 debug_assert_eq!(&self.text[prefix_match.clone()], &q[..prefix_len]);
