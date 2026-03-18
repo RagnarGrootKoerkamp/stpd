@@ -405,7 +405,14 @@ dependencies = [
  "packed-seq",
  "rand",
  "simd-minimizers",
+ "tiered-vector",
 ]
+
+[[package]]
+name = "tiered-vector"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7bd5056137d09d70f3207d5af7ad3824be2bca36f04733de7a5d64aa4d783d51"
 
 [[package]]
 name = "unicode-ident"

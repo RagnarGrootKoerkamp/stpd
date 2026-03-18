@@ -4,8 +4,6 @@ use std::{
     ops::Range,
 };
 
-use itertools::Itertools;
-
 /// Implementation of lex-min STPD.
 // TODO: Suffix lookup for binary search.
 pub struct Stpd {
@@ -18,7 +16,7 @@ pub struct Stpd {
     /// `spa[0]` is the 'trivial' empty anchor at the root of the text.
     // TODO: BTree instead so we can insert samples.
     // TODO: Efficient range min.
-    spa: Vec<Anchor>,
+    spa: tiered_vector::Vector<Anchor>,
 
     /// The longest suffix `text[pos-seen_before.len()..pos]` that was seen before at `text[seen_before]`.
     seen_before: Range<usize>,
@@ -62,16 +60,17 @@ impl Stpd {
         log::info!("NEW");
         let mut stpd = Self {
             text: ByteString(vec![]),
-            spa: vec![Anchor {
-                pos: 0,
-                min_len: 0,
-                // max_len: 0,
-                suffix_pos: 0,
-                suffix_anchor_pos: 0,
-            }],
+            spa: tiered_vector::Vector::new(),
             seen_before: 0..0,
             anchor_idx: 0,
         };
+        stpd.spa.push(Anchor {
+            pos: 0,
+            min_len: 0,
+            // max_len: 0,
+            suffix_pos: 0,
+            suffix_anchor_pos: 0,
+        });
         stpd.push(text);
         stpd
     }
@@ -110,9 +109,9 @@ impl Stpd {
             }
 
             // Search prefix array for match with additional character.
-            if let Some((anchor, sb)) = self.search_anchor(extended) {
+            if let Some(((ai, _anchor), sb)) = self.search_anchor(extended) {
                 log::info!("Found match of {extended:?} via binary search at {sb:?}.");
-                anchor_idx = self.spa.element_offset(anchor).unwrap();
+                anchor_idx = ai;
                 seen_before = sb;
                 log::info!("New anchor {anchor_idx}");
                 assert_eq!(
@@ -177,8 +176,7 @@ impl Stpd {
             while seen_before.len() > 0 {
                 // Seen before is one less than that.
                 // Take suffix link of the anchor.
-                (anchor, seen_before) = self.suffix_link(seen_before, anchor);
-                anchor_idx = self.spa.element_offset(anchor).unwrap();
+                ((anchor_idx, anchor), seen_before) = self.suffix_link(seen_before, anchor);
                 assert_eq!(
                     text[seen_before.clone()],
                     text[pos - seen_before.len()..pos]
@@ -194,11 +192,11 @@ impl Stpd {
                 // Otherwise, we might be able to find an existing RME anchor.
                 let suffix = &text[pos - seen_before.len()..=pos];
                 log::info!("Binary search for suffix {suffix:?}",);
-                if let Some((a, sb)) = self.search_anchor(suffix) {
+                if let Some(((ai, a), sb)) = self.search_anchor(suffix) {
                     log::info!("Found previous occurrence via binary search at {sb:?} {a:?}.");
+                    anchor_idx = ai;
                     anchor = a;
                     seen_before = sb;
-                    anchor_idx = self.spa.element_offset(anchor).unwrap();
                     assert_eq!(
                         &text[seen_before.clone()],
                         &text[pos + 1 - seen_before.len()..=pos]
@@ -248,48 +246,52 @@ impl Stpd {
         self.anchor_idx = anchor_idx;
     }
 
+    /// `cmp`: true when anchor < query.
+    fn binary_search_by(&self, cmp: impl Fn(&Anchor) -> bool) -> usize {
+        let mut l = 0;
+        let mut h = self.spa.len();
+        while l < h {
+            let m = (l + h) / 2;
+            if cmp(&self.spa[m]) {
+                h = m;
+            } else {
+                l = m + 1;
+            }
+        }
+        l
+    }
+
     /// Find the range of `spa` that has `q` as a suffix.
     // TODO: Do everything in reverse instead, so we have normal lex comparisons?
     fn binary_search(&self, q: &[u8]) -> Range<usize> {
-        let start = self
-            .spa
-            .binary_search_by(|rme| match cmp_colex(&self.text[..rme.pos], q) {
-                Ordering::Equal => Ordering::Greater,
-                x => x,
-            })
-            .unwrap_err();
-        let end = self
-            .spa
-            .binary_search_by(|rme| match cmp_colex(&self.text[..rme.pos], q) {
-                Ordering::Equal => Ordering::Less,
-                x => x,
-            })
-            .unwrap_err();
+        let start =
+            self.binary_search_by(|rme| cmp_colex(&self.text[..rme.pos], q) != Ordering::Less);
+        let end =
+            self.binary_search_by(|rme| cmp_colex(&self.text[..rme.pos], q) == Ordering::Greater);
         start..end
     }
 
     /// Return the leftmost sampled RME matching q and the matching range, if it exists.
-    fn search_anchor(&self, q: &[u8]) -> Option<(&Anchor, Range<usize>)> {
+    fn search_anchor(&self, q: &[u8]) -> Option<((usize, &Anchor), Range<usize>)> {
         let range = self.binary_search(q);
         if range.is_empty() {
             return None;
         }
         // Find the smallest index in the range.
         // TODO: O(1) RMQ?
-        let rme_index = range.start
-            + self.spa[range]
-                .iter()
-                .position_min_by_key(|rme| rme.pos)
-                .unwrap();
+        let rme_index = range
+            .into_iter()
+            .min_by_key(|idx| self.spa[*idx].pos)
+            .unwrap();
         let anchor = &self.spa[rme_index];
         let range = anchor.pos - q.len()..anchor.pos;
         assert_eq!(&self.text[range.clone()], q);
-        Some((anchor, range))
+        Some(((rme_index, anchor), range))
     }
 
     /// Leftmost occurrence of q, if it occurs.
     pub fn locate_one(&self, q: &[u8]) -> Option<Range<usize>> {
-        let m = self.extend(q, 0..0, &self.spa[0]).0;
+        let m = self.extend(q, 0..0, 0, &self.spa[0]).0;
         if m.len() == q.len() {
             Some(m)
         } else {
@@ -304,8 +306,9 @@ impl Stpd {
         &'s self,
         q: &[u8],
         prefix_match: Range<usize>,
+        mut anchor_idx: usize,
         mut anchor: &'s Anchor,
-    ) -> (Range<usize>, &'s Anchor) {
+    ) -> (Range<usize>, (usize, &'s Anchor)) {
         assert_eq!(self.text[prefix_match.clone()], q[..prefix_match.len()]);
         assert!(prefix_match.start <= anchor.pos && anchor.pos <= prefix_match.end);
 
@@ -321,14 +324,15 @@ impl Stpd {
             }
 
             // q[..i] does not occur at `pos`, so is either an RME or does not occur at all.
-            let Some((new_anchor, _)) = self.search_anchor(&q[..=i]) else {
+            let Some(((new_anchor_idx, new_anchor), _)) = self.search_anchor(&q[..=i]) else {
                 break;
             };
+            anchor_idx = new_anchor_idx;
             anchor = new_anchor;
             pos = anchor.pos;
             i += 1;
         }
-        (pos - i..pos, anchor)
+        (pos - i..pos, (anchor_idx, anchor))
     }
 
     /// Given the leftmost occurrence ending at `pos` (inclusive!) with the given RME anchor
@@ -370,10 +374,12 @@ impl Stpd {
         &'s self,
         mut matched: Range<usize>,
         mut anchor: &'s Anchor,
-    ) -> (&'s Anchor, Range<usize>) {
+    ) -> ((usize, &'s Anchor), Range<usize>) {
         assert!(matched.len() > 0);
         let mut target = &self.text[matched.clone()];
         log::info!("Suffix link of: matched={matched:?} target={target:?} {anchor:?} ");
+
+        let mut anchor_idx;
 
         loop {
             // anchor itself is in the range
@@ -398,20 +404,20 @@ impl Stpd {
             log::info!("Shrink target to {target:?}");
             log::info!("Updated matched to {matched:?}");
             // The suffix link anchor.
-            anchor = self
+            (anchor_idx, anchor) = self
                 .search_anchor(&self.text[matched.start..anchor.suffix_anchor_pos])
                 .unwrap()
                 .0;
             log::info!("suffix link anchor {anchor:?}");
             // Extend the match as much as possible.
             log::info!("Extend {target:?} {matched:?} {anchor:?}");
-            (matched, anchor) = self.extend(target, matched, anchor);
+            (matched, (anchor_idx, anchor)) = self.extend(target, matched, anchor_idx, anchor);
             log::info!("Extend into {matched:?} {anchor:?}");
             assert_eq!(&self.text[matched.clone()], &target[..matched.len()]);
             // If the entire target suffix matched, return it.
             if matched.len() == target.len() {
                 log::info!("Found suffix link: matched={matched:?} anchor={anchor:?}");
-                return (anchor, matched);
+                return ((anchor_idx, anchor), matched);
             }
             log::info!(
                 "Current match {matched:?} = {} is not yet full target {target:?}",
