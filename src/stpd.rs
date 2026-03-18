@@ -543,20 +543,27 @@ impl Stpd {
         }
 
         // TODO: Reuse the best match in case of failure.
-        let range = self.binary_search_range(q);
-        if range.is_empty() {
-            log::info!("Search |q|={}: {}=|{range:?}| failed", q.len(), range.len(),);
+        let range_start = self.binary_search(q, false, false);
+        let lcs = if range_start < self.spa.len() {
+            lcs(&self.text[..self.spa[range_start].pos], q)
+        } else {
+            0
+        };
+        log::info!("Search |q|={}: {range_start}.. , lcs={lcs}", q.len());
+        if lcs < q.len() {
             return None;
         }
-        // Find the smallest index in the range.
-        // TODO: O(1) RMQ?
-        if range.len() > 30 {
-            log::warn!("Large range of {} for query len {}", range.len(), q.len());
-        }
-        let rme_index = range
-            .into_iter()
-            .min_by_key(|idx| self.spa[*idx].pos)
-            .unwrap();
+        // TODO: Range query with O(1) RMQ?
+        let rme_index = 'i: {
+            for i in range_start.. {
+                let anchor = &self.spa[i];
+                if q.len() >= anchor.min_len {
+                    break 'i i;
+                }
+            }
+            unreachable!();
+        };
+
         let anchor = &self.spa[rme_index];
         let range = anchor.pos - q.len()..anchor.pos;
         debug_assert_eq!(&self.text[range.clone()], q);
