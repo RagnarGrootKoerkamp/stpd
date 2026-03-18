@@ -7,6 +7,7 @@ use std::{
 use itertools::Itertools;
 
 /// Implementation of lex-min STPD.
+// TODO: Suffix lookup for binary search.
 pub struct Stpd {
     /// The input text.
     // TODO: Relative LZ encoding.
@@ -32,6 +33,7 @@ pub struct Stpd {
 /// This position is an RME for an interval of length of `s`:
 /// - For very short `s'`, `s'A` will already occur to the left of `pos`.
 /// - For very long `s''`, this will already be the leftmost occurrence of `s''`.
+// TODO: Inline the last u64 of the prefix.
 #[derive(Debug)]
 pub struct Anchor {
     /// Position in the text of the RME sample.
@@ -312,7 +314,7 @@ impl Stpd {
         // *End* position of leftmost occurrence in text of q[..i].
         let mut pos = prefix_match.end;
         while i < q.len() {
-            if self.text[pos] == q[i] {
+            if unsafe { *self.text.get_unchecked(pos) } == q[i] {
                 i += 1;
                 pos += 1;
                 continue;
@@ -423,22 +425,50 @@ impl Stpd {
 
 /// Length of longest common suffix.
 fn lcs(a: &[u8], b: &[u8]) -> usize {
+    // TODO: u64-based comparisons.
     let mut i = 0;
-    while i < Ord::min(a.len(), b.len()) && a[a.len() - 1 - i] == b[b.len() - 1 - i] {
+    let min = Ord::min(a.len(), b.len());
+    while i < min && a[a.len() - 1 - i] == b[b.len() - 1 - i] {
         i += 1;
     }
     return i;
 }
 
+/// Read u64 ending at position i >= 8.
+fn read_u64(text: &[u8], i: usize) -> u64 {
+    debug_assert!(i >= 8);
+    unsafe { u64::from_le_bytes(text.get_unchecked(i - 8..i).try_into().unwrap()) }
+}
+
+fn read_last_u64(text: &[u8], i: usize, len: usize) -> u64 {
+    debug_assert!(len < 8);
+    let mut data = [0; 8];
+    data[8 - len..].copy_from_slice(unsafe { text.get_unchecked(i - len..i) });
+    u64::from_le_bytes(data)
+}
+
 /// co-lex compare q with a text prefix.
 /// Returns `Equal` when `q` is a suffix of `text`.
 fn cmp_colex(text: &[u8], q: &[u8]) -> Ordering {
-    let l = lcs(text, q);
-    if l == q.len() {
+    let min_len = Ord::min(text.len(), q.len());
+    let min = min_len / 8 * 8;
+    for i in (0..min).step_by(8) {
+        let text_chunk = read_u64(text, text.len() - i);
+        let q_chunk = read_u64(q, q.len() - i);
+        if text_chunk != q_chunk {
+            return Ord::cmp(&text_chunk, &q_chunk);
+        }
+    }
+    let text_chunk = read_last_u64(text, text.len() - min, min_len - min);
+    let q_chunk = read_last_u64(q, q.len() - min, min_len - min);
+    if text_chunk != q_chunk {
+        return Ord::cmp(&text_chunk, &q_chunk);
+    }
+    if min_len == q.len() {
         return Ordering::Equal;
     }
-    if l == text.len() {
+    if min_len == text.len() {
         return Ordering::Less;
     }
-    return Ord::cmp(&text[text.len() - 1 - l], &q[q.len() - 1 - l]);
+    unreachable!();
 }
