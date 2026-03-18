@@ -169,9 +169,7 @@ impl Stpd {
             log::info!("New anchor {new_anchor:?}");
 
             // Insert anchor
-            let pos_range = self.binary_search_range(&text[..=pos]);
-            assert_eq!(pos_range.start, pos_range.end);
-            let insert_idx = pos_range.start;
+            let insert_idx = self.binary_search(&text[..=pos], false, true);
             log::debug!(
                 "Insert anchor #{} at position {}",
                 self.spa.len(),
@@ -357,14 +355,13 @@ impl Stpd {
         // 3) left of the anchor. We find it by repeated suffix-link and extend.
 
         // 2) Find the longest match in the prefix array.
-        let range = self.binary_search_range(&self.text[..=pos]);
-        assert!(range.is_empty());
+        let range_start = self.binary_search(&self.text[..=pos], false, true);
         // Test the strings before and after.
         // Find all that have the maximal LCS length, and of those, report the leftmost.
         let mut max_lcs = (0, Reverse(usize::MAX), 0);
         // (lcs length, text index, anchor idx)
 
-        let mut i = range.start;
+        let mut i = range_start;
         while i > 0 {
             i -= 1;
             let lcs_len = lcs(&self.text[..self.spa[i].pos], extended);
@@ -373,7 +370,7 @@ impl Stpd {
             }
             max_lcs = max_lcs.max((lcs_len, Reverse(self.spa[i].pos), i));
         }
-        i = range.start;
+        i = range_start;
         while i < self.spa.len() {
             let lcs_len = lcs(&self.text[..self.spa[i].pos], extended);
             if lcs_len < max_lcs.0 {
@@ -509,6 +506,7 @@ impl Stpd {
     }
 
     /// Find the range of `spa` that has `q` as a suffix.
+    #[allow(unused)]
     fn binary_search_range(&self, q: &[u8]) -> Range<usize> {
         let start = self.binary_search(q, false, false);
         let end = self.binary_search(q, true, false);
