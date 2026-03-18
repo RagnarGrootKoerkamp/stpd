@@ -60,6 +60,9 @@ pub struct Anchor {
     /// The position in the text (before `suffix_pos`) where the leftmost occurrence of `text[pos-min_len+1..pos]` is anchored.
     /// *Not* the index in `STPD::spa` of the anchor itself, since this can change over time.
     suffix_anchor_pos: usize,
+
+    /// The value of the 32 characters ending at `pos`.
+    value: u64,
 }
 
 impl Stpd {
@@ -80,6 +83,7 @@ impl Stpd {
             // max_len: 0,
             suffix_pos: 0,
             suffix_anchor_pos: 0,
+            value: 0,
         });
         stpd.push(text);
         stpd
@@ -159,6 +163,7 @@ impl Stpd {
                 min_len: seen_before.len() + 1,
                 suffix_pos: seen_before.end,
                 suffix_anchor_pos: anchor.pos,
+                value: encode_suffix(&text[..=pos]),
             };
 
             log::info!("New anchor {new_anchor:?}");
@@ -787,8 +792,12 @@ fn cmp_colex(text: &[u8], q: &[u8]) -> (usize, Ordering) {
     unreachable!();
 }
 
-fn encode(text: &[u8]) -> usize {
+fn encode(text: &[u8]) -> u64 {
     assert!(text.len() <= usize::BITS as usize / 2);
     text.iter()
-        .fold(0, |acc, &b| acc * 4 + (b as usize - b'A' as usize))
+        .fold(0, |acc, &b| acc * 4 + (b as u64 - b'A' as u64))
+}
+
+fn encode_suffix(text: &[u8]) -> u64 {
+    encode(&text[text.len().saturating_sub(usize::BITS as usize / 2)..])
 }
