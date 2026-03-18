@@ -241,13 +241,17 @@ impl Stpd {
 
         let mut l = 0;
         let mut h = extended.len();
+        let mut anchor_idx = 0;
+        let mut anchor = &self.spa[0];
+        let mut seen_before = 0..0;
         log::warn!("Binary search for suffix len 0..{h}");
         while l < h {
             let mid = (l + h + 1) / 2;
             log::debug!("l {l} mid {mid} h {h}");
             let q = &extended[extended.len() - mid..];
 
-            if let Some(mut m) = self.locate_one(q) {
+            let (mut m, (ai, a)) = self.extend(q, 0..0, 0, &self.spa[0]);
+            if m.len() == q.len() {
                 assert_eq!(m.len(), mid);
                 // Try to extend the match on the left to increase l.
                 debug_assert_eq!(&self.text[m.clone()], q);
@@ -265,14 +269,15 @@ impl Stpd {
                 if l > mid {
                     log::info!("Grow l from {mid} to {l}");
                 }
+                anchor_idx = ai;
+                anchor = a;
+                seen_before = m;
             } else {
                 h = mid - 1;
             }
         }
         log::info!("l {l} h {h}");
-        let q = &extended[extended.len() - l..];
-        let (seen_before, (anchor_idx, anchor)) = self.extend(q, 0..0, 0, &self.spa[0]);
-        assert_eq!(seen_before.len(), q.len());
+        assert_eq!(seen_before.len(), l);
         ((anchor_idx, anchor), seen_before)
     }
 
