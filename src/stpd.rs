@@ -85,7 +85,7 @@ impl Stpd {
         stpd
     }
     pub fn push(&mut self, text: &[u8]) {
-        log::info!("Push {}", ByteStr::new(text));
+        log::debug!("Push {}", ByteStr::new(text));
         let old_len = self.text.len();
         self.text.extend_from_slice(text);
         let text = &self.text;
@@ -93,6 +93,7 @@ impl Stpd {
         let mut seen_before = self.seen_before.clone();
         let mut anchor_idx = self.anchor_idx;
         // No need to create an anchor for the first character.
+        let mut extends = 0;
         for pos in old_len.max(1)..text.len() {
             // Append text[pos].
             let c = text[pos];
@@ -110,8 +111,11 @@ impl Stpd {
             if text[seen_before.end] == c {
                 log::debug!("Found by extending current match.");
                 seen_before.end += 1;
+                extends += 1;
                 continue;
             }
+            log::info!("Extended {extends}\n");
+            extends = 0;
             log::info!(
                 "Pos {pos} Push {}. Seen before: {}=|{seen_before:?}| with anchor {}",
                 c as char,
@@ -120,6 +124,7 @@ impl Stpd {
             );
 
             // Search prefix array for match with additional character.
+            // TODO: Use output of failed search.
             if let Some(((ai, _anchor), sb)) = self.search_anchor(extended) {
                 log::debug!("Found match of {extended:?} via binary search at {sb:?}.");
                 anchor_idx = ai;
@@ -141,6 +146,12 @@ impl Stpd {
             let anchor;
             ((anchor_idx, anchor), seen_before) =
                 self.longest_existing_suffix(seen_before, anchor_idx, pos);
+
+            log::info!(
+                "Found at {}=|{seen_before:?}| with anchor {:?}",
+                seen_before.len(),
+                anchor,
+            );
 
             let new_anchor = Anchor {
                 pos: pos + 1,
@@ -364,7 +375,8 @@ impl Stpd {
         let right_anchor = &self.spa[right_anchor_idx];
         let right_seen_before = right_anchor.pos - max_lcs.0..right_anchor.pos;
         log::info!(
-            "Right seen before: {right_seen_before:?} with anchor {}",
+            "Right seen before: {}=|{right_seen_before:?}| with anchor {}",
+            right_seen_before.len(),
             right_anchor.pos
         );
 
@@ -487,6 +499,7 @@ impl Stpd {
 
         let range = self.binary_search(q);
         if range.is_empty() {
+            log::info!("Search |q|={}: {}=|{range:?}| failed", q.len(), range.len(),);
             return None;
         }
         // Find the smallest index in the range.
@@ -507,6 +520,12 @@ impl Stpd {
             log::info!("Save result for {}: {:?}", q.len(), ByteStr::new(q));
             self.prefix_lookup.borrow_mut()[q.len()][idx as usize] = (anchor.pos, anchor.pos);
         }
+        log::info!(
+            "Search |q|={}: {}=|{range:?}| anchored at {:?}",
+            q.len(),
+            range.len(),
+            anchor
+        );
 
         Some(((rme_index, anchor), range))
     }
@@ -590,7 +609,7 @@ impl Stpd {
                 continue;
             }
 
-            searches.push(i);
+            searches.push(i + 1);
 
             // q[..i] does not occur at `pos`, so is either an RME or does not occur at all.
             let Some(((new_anchor_idx, new_anchor), _)) = self.search_anchor(&q[..=i]) else {
@@ -610,12 +629,12 @@ impl Stpd {
 
         let range = pos - i..pos;
         log::info!(
-            "extend |q|={} with {}=|{searches:?}| searches from {}=|{prefix_match:?}| to {}=|{range:?}| anchored at {}",
+            "extend |q|={} with {}=|{searches:?}| searches from {}=|{prefix_match:?}| to {}=|{range:?}| anchored at {:?}",
             q.len(),
             searches.len(),
             prefix_match.len(),
             range.len(),
-            anchor.pos
+            anchor
         );
         (range, (anchor_idx, anchor))
     }
