@@ -124,112 +124,22 @@ impl Stpd {
             log::debug!("Add new anchor for max_len={}", extended.len());
 
             // This is the first occurrence of `extended`, so we add an anchor for it.
-            let mut new_anchor = Anchor {
+            // We now search for the "min_len", ie the longest suffix of
+            // `extended` that occurs before, and its anchor.
+            // let max_len = extended.len();
+            let anchor;
+            ((anchor_idx, anchor), seen_before) =
+                self.longest_existing_suffix(seen_before, anchor_idx, pos);
+
+            let new_anchor = Anchor {
                 pos: pos + 1,
-                // max_len: extended.len(),
-                min_len: usize::MAX,
-                suffix_pos: usize::MAX,
-                suffix_anchor_pos: usize::MAX,
+                // max_len,
+                min_len: seen_before.len() + 1,
+                suffix_pos: seen_before.end,
+                suffix_anchor_pos: anchor.pos,
             };
 
-            // Suppose the existing longest seen before suffix is ABCDEF and it matches
-            // around some anchor as ABC.DEF.
-            // We want to find whether there is a previous occurrence of ABCDEFG, and if not, the longest suffix for which there is.
-            // 3 options for the leftmost longest suffix match:
-            // 1) at the current anchor. => The new suffix is not an RME and already handled above.
-            // 2) right of the anchor. The G will be sampled as an RME, and we find it via binary search.
-            // 3) left of the anchor. We find it by repeated suffix-link and extend.
-
-            // 2) Find the longest match in the prefix array.
-            let range = self.binary_search(&self.text[..=pos]);
-            assert!(range.is_empty());
-            // Test the strings before and after.
-            // Find all that have the maximal LCS length, and of those, report the leftmost.
-            let mut max_lcs = (0, Reverse(usize::MAX), 0); // (lcs length, text index, anchor idx)
-
-            let mut i = range.start;
-            while i > 0 {
-                i -= 1;
-                let lcs_len = lcs(&self.text[..self.spa[i].pos], extended);
-                if lcs_len < max_lcs.0 {
-                    break;
-                }
-                max_lcs = max_lcs.max((lcs_len, Reverse(self.spa[i].pos), i));
-            }
-            i = range.start;
-            while i < self.spa.len() {
-                let lcs_len = lcs(&self.text[..self.spa[i].pos], extended);
-                if lcs_len < max_lcs.0 {
-                    break;
-                }
-                max_lcs = max_lcs.max((lcs_len, Reverse(self.spa[i].pos), i));
-                i += 1;
-            }
-            let right_anchor_idx = max_lcs.2;
-            let right_anchor = &self.spa[right_anchor_idx];
-            let right_seen_before = right_anchor.pos - max_lcs.0..right_anchor.pos;
-            log::warn!(
-                "Right seen before: {right_seen_before:?} with anchor {}",
-                right_anchor.pos
-            );
-
-            // 3) Repeatedly take suffix links to find the min_len, ie the length of the shortest suffix
-            // for which the just pushed character is the anchor.
-            let mut anchor = &self.spa[anchor_idx];
-            // TODO: Prune search once it's worse than what we see on the right.
-            log::error!("Suffix link of {seen_before:?} extended by {}", c as char);
-            while seen_before.len() > 0 {
-                // Seen before is one less than that.
-                // Take suffix link of the anchor.
-                ((anchor_idx, anchor), seen_before) = self.suffix_link(seen_before, anchor);
-                debug_assert_eq!(
-                    text[seen_before.clone()],
-                    text[pos - seen_before.len()..pos]
-                );
-
-                // If we can extend the suffix match with the right character, we update `seen_before` and are done.
-                if text[seen_before.end] == c {
-                    log::info!("Found previous occurrence by extending suffix link.");
-                    seen_before.end += 1;
-                    break;
-                }
-
-                // Otherwise, we might be able to find an existing RME anchor.
-                let suffix = &text[pos - seen_before.len()..=pos];
-                log::info!("Binary search for suffix {suffix:?}",);
-                if let Some(((ai, a), sb)) = self.search_anchor(suffix) {
-                    log::info!("Found previous occurrence via binary search at {sb:?} {a:?}.");
-                    anchor_idx = ai;
-                    anchor = a;
-                    seen_before = sb;
-                    debug_assert_eq!(
-                        &text[seen_before.clone()],
-                        &text[pos + 1 - seen_before.len()..=pos]
-                    );
-                    assert!(seen_before.len() <= right_seen_before.len());
-                    break;
-                }
-                log::info!("Take another suffix link");
-
-                // Otherwise, this suffix cannot be extended with `c`, and we take further suffix links.
-            }
-
-            // Take the max of the two options.
-            if right_seen_before.len() > seen_before.len()
-                || (right_seen_before.len() == seen_before.len() && right_anchor.pos < anchor.pos)
-            {
-                log::info!("Found better match on the right.");
-                anchor = right_anchor;
-                seen_before = right_seen_before;
-                anchor_idx = right_anchor_idx;
-            }
-
-            // Update anchor
-            new_anchor.min_len = seen_before.len() + 1;
-            new_anchor.suffix_pos = seen_before.end;
-            new_anchor.suffix_anchor_pos = anchor.pos;
-
-            log::warn!("New anchor {new_anchor:?}");
+            log::info!("New anchor {new_anchor:?}");
 
             // Insert anchor
             let pos_range = self.binary_search(&text[..=pos]);
@@ -252,6 +162,162 @@ impl Stpd {
         log::error!("Num anchors: {}", self.spa.len());
         self.seen_before = seen_before;
         self.anchor_idx = anchor_idx;
+    }
+
+    /// Given that the current suffix occurs before at `seen_before` with the given `anchor_idx`,
+    /// find the longest suffix of `text[..=pos]` that occurs before, and its anchor.
+    ///
+    /// This version binary searches the length of the suffix to find the longest that occurs.
+    fn longest_existing_suffix_via_binary_search(
+        &self,
+        seen_before: Range<usize>,
+        _anchor_idx: usize,
+        pos: usize,
+    ) -> ((usize, &Anchor), Range<usize>) {
+        let extended = &self.text[pos - seen_before.len()..=pos];
+
+        let mut l = 0;
+        let mut h = extended.len();
+        log::info!("Binary search for suffix len 0..{h}");
+        while l < h {
+            let mid = (l + h + 1) / 2;
+            let q = &extended[extended.len() - mid..];
+
+            let found = self.locate_one(q).is_some();
+            if found {
+                l = mid;
+            } else {
+                h = mid - 1;
+            }
+        }
+        let q = &extended[extended.len() - l..];
+        let (seen_before, (anchor_idx, anchor)) = self.extend(q, 0..0, 0, &self.spa[0]);
+        ((anchor_idx, anchor), seen_before)
+    }
+
+    fn longest_existing_suffix(
+        &self,
+        seen_before: Range<usize>,
+        anchor_idx: usize,
+        pos: usize,
+    ) -> ((usize, &Anchor), Range<usize>) {
+        if seen_before.len() > 20 {
+            self.longest_existing_suffix_via_binary_search(seen_before, anchor_idx, pos)
+        } else {
+            self.longest_existing_suffix_via_links(seen_before, anchor_idx, pos)
+        }
+    }
+
+    /// Given that the current suffix occurs before at `seen_before` with the given `anchor_idx`,
+    /// find the longest suffix of `text[..=pos]` that occurs before, and its anchor.
+    ///
+    /// This version repeatedly follows suffix links.
+    fn longest_existing_suffix_via_links(
+        &self,
+        mut seen_before: Range<usize>,
+        mut anchor_idx: usize,
+        pos: usize,
+    ) -> ((usize, &Anchor), Range<usize>) {
+        let c = self.text[pos];
+        let extended = &self.text[pos - seen_before.len()..=pos];
+
+        // Suppose the existing longest seen before suffix is ABCDEF and it matches
+        // around some anchor as ABC.DEF.
+        // We want to find whether there is a previous occurrence of ABCDEFG, and if not, the longest suffix for which there is.
+        // 3 options for the leftmost longest suffix match:
+        // 1) at the current anchor. => The new suffix is not an RME and already handled above.
+        // 2) right of the anchor. The G will be sampled as an RME, and we find it via binary search.
+        // 3) left of the anchor. We find it by repeated suffix-link and extend.
+
+        // 2) Find the longest match in the prefix array.
+        let range = self.binary_search(&self.text[..=pos]);
+        assert!(range.is_empty());
+        // Test the strings before and after.
+        // Find all that have the maximal LCS length, and of those, report the leftmost.
+        let mut max_lcs = (0, Reverse(usize::MAX), 0);
+        // (lcs length, text index, anchor idx)
+
+        let mut i = range.start;
+        while i > 0 {
+            i -= 1;
+            let lcs_len = lcs(&self.text[..self.spa[i].pos], extended);
+            if lcs_len < max_lcs.0 {
+                break;
+            }
+            max_lcs = max_lcs.max((lcs_len, Reverse(self.spa[i].pos), i));
+        }
+        i = range.start;
+        while i < self.spa.len() {
+            let lcs_len = lcs(&self.text[..self.spa[i].pos], extended);
+            if lcs_len < max_lcs.0 {
+                break;
+            }
+            max_lcs = max_lcs.max((lcs_len, Reverse(self.spa[i].pos), i));
+            i += 1;
+        }
+        let right_anchor_idx = max_lcs.2;
+        let right_anchor = &self.spa[right_anchor_idx];
+        let right_seen_before = right_anchor.pos - max_lcs.0..right_anchor.pos;
+        log::info!(
+            "Right seen before: {right_seen_before:?} with anchor {}",
+            right_anchor.pos
+        );
+
+        // 3) Repeatedly take suffix links to find the min_len, ie the length of the shortest suffix
+        // for which the just pushed character is the anchor.
+        let mut anchor = &self.spa[anchor_idx];
+        // TODO: Prune search once it's worse than what we see on the right.
+        log::warn!(
+            "Suffix link of {}=|{seen_before:?}| extended by {}",
+            seen_before.len(),
+            c as char
+        );
+        while seen_before.len() > 0 {
+            // Seen before is one less than that.
+            // Take suffix link of the anchor.
+            ((anchor_idx, anchor), seen_before) = self.suffix_link(seen_before.clone(), anchor);
+            debug_assert_eq!(
+                self.text[seen_before.clone()],
+                self.text[pos - seen_before.len()..pos]
+            );
+
+            // If we can extend the suffix match with the right character, we update `seen_before` and are done.
+            if self.text[seen_before.end] == c {
+                log::debug!("Found previous occurrence by extending suffix link.");
+                seen_before.end += 1;
+                break;
+            }
+
+            // Otherwise, we might be able to find an existing RME anchor.
+            let suffix = &self.text[pos - seen_before.len()..=pos];
+            log::debug!("Binary search for suffix {suffix:?}",);
+            if let Some(((ai, a), sb)) = self.search_anchor(suffix) {
+                log::debug!("Found previous occurrence via binary search at {sb:?} {a:?}.");
+                anchor_idx = ai;
+                anchor = a;
+                seen_before = sb;
+                debug_assert_eq!(
+                    &self.text[seen_before.clone()],
+                    &self.text[pos + 1 - seen_before.len()..=pos]
+                );
+                assert!(seen_before.len() <= right_seen_before.len());
+                break;
+            }
+            log::debug!("Take another suffix link");
+
+            // Otherwise, this suffix cannot be extended with `c`, and we take further suffix links.
+        }
+
+        // Take the max of the two options.
+        if right_seen_before.len() > seen_before.len()
+            || (right_seen_before.len() == seen_before.len() && right_anchor.pos < anchor.pos)
+        {
+            log::debug!("Found better match on the right.");
+            anchor = right_anchor;
+            seen_before = right_seen_before;
+            anchor_idx = right_anchor_idx;
+        }
+        ((anchor_idx, anchor), seen_before)
     }
 
     /// `cmp`: true when anchor < query.
