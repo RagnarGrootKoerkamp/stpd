@@ -86,11 +86,6 @@ impl Stpd {
         for pos in old_len.max(1)..text.len() {
             // Append text[pos].
             let c = text[pos];
-            log::warn!(
-                "Pos {pos} Push {}. Seen before: text[{seen_before:?}]={:?} with anchor {anchor_idx}",
-                c as char,
-                &text[seen_before.clone()]
-            );
             debug_assert_eq!(
                 text[seen_before.clone()],
                 text[pos - seen_before.len()..pos]
@@ -107,6 +102,11 @@ impl Stpd {
                 seen_before.end += 1;
                 continue;
             }
+            log::warn!(
+                "Pos {pos} Push {}. Seen before: text[{seen_before:?}] with anchor {}",
+                c as char,
+                self.spa[anchor_idx].pos
+            );
 
             // Search prefix array for match with additional character.
             if let Some(((ai, _anchor), sb)) = self.search_anchor(extended) {
@@ -168,11 +168,16 @@ impl Stpd {
             let right_anchor_idx = max_lcs.2;
             let right_anchor = &self.spa[right_anchor_idx];
             let right_seen_before = right_anchor.pos - max_lcs.0..right_anchor.pos;
+            log::warn!(
+                "Right seen before: {right_seen_before:?} with anchor {}",
+                right_anchor.pos
+            );
 
             // 3) Repeatedly take suffix links to find the min_len, ie the length of the shortest suffix
             // for which the just pushed character is the anchor.
             let mut anchor = &self.spa[anchor_idx];
             // TODO: Prune search once it's worse than what we see on the right.
+            log::error!("Suffix link of {seen_before:?} extended by {}", c as char);
             while seen_before.len() > 0 {
                 // Seen before is one less than that.
                 // Take suffix link of the anchor.
@@ -201,6 +206,7 @@ impl Stpd {
                         &text[seen_before.clone()],
                         &text[pos + 1 - seen_before.len()..=pos]
                     );
+                    assert!(seen_before.len() <= right_seen_before.len());
                     break;
                 }
                 log::info!("Take another suffix link");
@@ -209,7 +215,9 @@ impl Stpd {
             }
 
             // Take the max of the two options.
-            if right_seen_before.len() > seen_before.len() {
+            if right_seen_before.len() > seen_before.len()
+                || (right_seen_before.len() == seen_before.len() && right_anchor.pos < anchor.pos)
+            {
                 log::info!("Found better match on the right.");
                 anchor = right_anchor;
                 seen_before = right_seen_before;
@@ -315,12 +323,15 @@ impl Stpd {
         let mut i = prefix_match.len();
         // *End* position of leftmost occurrence in text of q[..i].
         let mut pos = prefix_match.end;
+        let mut searches = 0;
         while i < q.len() {
             if unsafe { *self.text.get_unchecked(pos) } == q[i] {
                 i += 1;
                 pos += 1;
                 continue;
             }
+
+            searches += 1;
 
             // q[..i] does not occur at `pos`, so is either an RME or does not occur at all.
             let Some(((new_anchor_idx, new_anchor), _)) = self.search_anchor(&q[..=i]) else {
@@ -331,7 +342,13 @@ impl Stpd {
             pos = anchor.pos;
             i += 1;
         }
-        (pos - i..pos, (anchor_idx, anchor))
+
+        let range = pos - i..pos;
+        log::warn!(
+            "extend |q|={} with {searches} searches from {prefix_match:?} to {range:?} anchored at {}",
+            q.len(), anchor.pos
+        );
+        (range, (anchor_idx, anchor))
     }
 
     /// Given the leftmost occurrence ending at `pos` (inclusive!) with the given RME anchor
@@ -376,7 +393,7 @@ impl Stpd {
     ) -> ((usize, &'s Anchor), Range<usize>) {
         assert!(matched.len() > 0);
         let mut target = &self.text[matched.clone()];
-        log::info!("Suffix link of: matched={matched:?} target={target:?} {anchor:?} ");
+        log::warn!("Suffix link of: matched={matched:?} {anchor:?} ");
 
         let mut anchor_idx;
 
@@ -401,7 +418,7 @@ impl Stpd {
                 matched = anchor.suffix_pos + 1 - (anchor.min_len - 0)..anchor.suffix_pos;
             }
             log::info!("Shrink target to {target:?}");
-            log::info!("Updated matched to {matched:?}");
+            log::warn!("Updated matched to {matched:?}");
             // The suffix link anchor.
             (anchor_idx, anchor) = self
                 .search_anchor(&self.text[matched.start..anchor.suffix_anchor_pos])

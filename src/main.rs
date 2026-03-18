@@ -103,7 +103,9 @@ fn stats((name, t): &(String, T), print: bool) {
 }
 
 fn stpd() {
-    env_logger::init();
+    env_logger::Builder::from_default_env()
+        .format_timestamp_micros()
+        .init();
     let t = b"BANANABAANNABBBAAANNANBANANANBANANABANNNAAANABNANNAANABBANNANA";
     // let t = b"AAAAAAAAABAAAAAAA";
     // let t = &[t.as_slice(); 5].concat();
