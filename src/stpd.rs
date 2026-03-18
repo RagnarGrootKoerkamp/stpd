@@ -57,7 +57,7 @@ pub struct Anchor {
 
 impl Stpd {
     pub fn new(text: &[u8]) -> Self {
-        log::info!("NEW");
+        log::debug!("NEW");
         let mut stpd = Self {
             text: ByteString(vec![]),
             spa: tiered_vector::Vector::new(),
@@ -75,7 +75,7 @@ impl Stpd {
         stpd
     }
     pub fn push(&mut self, text: &[u8]) {
-        log::warn!("Push {}", ByteStr::new(text));
+        log::info!("Push {}", ByteStr::new(text));
         let old_len = self.text.len();
         self.text.extend_from_slice(text);
         let text = &self.text;
@@ -92,17 +92,17 @@ impl Stpd {
             );
 
             let extended = &text[pos - seen_before.len()..=pos];
-            log::info!("Extended: {extended:?}");
+            log::debug!("Extended: {extended:?}");
 
             // the seen-before part with one extra character
 
             // Found by extending match at current anchor.
             if text[seen_before.end] == c {
-                log::info!("Found by extending current match.");
+                log::debug!("Found by extending current match.");
                 seen_before.end += 1;
                 continue;
             }
-            log::warn!(
+            log::info!(
                 "Pos {pos} Push {}. Seen before: text[{seen_before:?}] with anchor {}",
                 c as char,
                 self.spa[anchor_idx].pos
@@ -110,10 +110,10 @@ impl Stpd {
 
             // Search prefix array for match with additional character.
             if let Some(((ai, _anchor), sb)) = self.search_anchor(extended) {
-                log::info!("Found match of {extended:?} via binary search at {sb:?}.");
+                log::debug!("Found match of {extended:?} via binary search at {sb:?}.");
                 anchor_idx = ai;
                 seen_before = sb;
-                log::info!("New anchor {anchor_idx}");
+                log::debug!("New anchor {anchor_idx}");
                 debug_assert_eq!(
                     &text[seen_before.clone()],
                     &text[pos - seen_before.len() + 1..=pos]
@@ -121,7 +121,7 @@ impl Stpd {
                 continue;
             }
 
-            log::info!("Add new anchor for max_len={}", extended.len());
+            log::debug!("Add new anchor for max_len={}", extended.len());
 
             // This is the first occurrence of `extended`, so we add an anchor for it.
             let mut new_anchor = Anchor {
@@ -235,14 +235,14 @@ impl Stpd {
             let pos_range = self.binary_search(&text[..=pos]);
             assert_eq!(pos_range.start, pos_range.end);
             let insert_idx = pos_range.start;
-            log::info!(
+            log::debug!(
                 "Insert anchor #{} at position {}",
                 self.spa.len(),
                 insert_idx
             );
             self.spa.insert(insert_idx, new_anchor);
             if insert_idx <= anchor_idx {
-                log::info!(
+                log::debug!(
                     "Inserted before current anchor idx; updating that to {}",
                     anchor_idx + 1
                 );
@@ -344,7 +344,7 @@ impl Stpd {
         }
 
         let range = pos - i..pos;
-        log::warn!(
+        log::info!(
             "extend |q|={} with {searches} searches from {prefix_match:?} to {range:?} anchored at {}",
             q.len(), anchor.pos
         );
@@ -393,7 +393,7 @@ impl Stpd {
     ) -> ((usize, &'s Anchor), Range<usize>) {
         assert!(matched.len() > 0);
         let mut target = &self.text[matched.clone()];
-        log::warn!("Suffix link of: matched={matched:?} {anchor:?} ");
+        log::info!("Suffix link of: matched={matched:?} {anchor:?} ");
 
         let mut anchor_idx;
 
@@ -417,25 +417,25 @@ impl Stpd {
                 // The range of text matched by the suffix link.
                 matched = anchor.suffix_pos + 1 - (anchor.min_len - 0)..anchor.suffix_pos;
             }
-            log::info!("Shrink target to {target:?}");
-            log::warn!("Updated matched to {matched:?}");
+            log::debug!("Shrink target to {target:?}");
+            // log::info!("Updated matched to {matched:?}");
             // The suffix link anchor.
             (anchor_idx, anchor) = self
                 .search_anchor(&self.text[matched.start..anchor.suffix_anchor_pos])
                 .unwrap()
                 .0;
-            log::info!("suffix link anchor {anchor:?}");
+            log::debug!("suffix link anchor {anchor:?}");
             // Extend the match as much as possible.
-            log::info!("Extend {target:?} {matched:?} {anchor:?}");
+            log::debug!("Extend {target:?} {matched:?} {anchor:?}");
             (matched, (anchor_idx, anchor)) = self.extend(target, matched, anchor_idx, anchor);
-            log::info!("Extend into {matched:?} {anchor:?}");
+            log::debug!("Extend into {matched:?} {anchor:?}");
             debug_assert_eq!(&self.text[matched.clone()], &target[..matched.len()]);
             // If the entire target suffix matched, return it.
             if matched.len() == target.len() {
-                log::info!("Found suffix link: matched={matched:?} anchor={anchor:?}");
+                log::debug!("Found suffix link: matched={matched:?} anchor={anchor:?}");
                 return ((anchor_idx, anchor), matched);
             }
-            log::info!(
+            log::debug!(
                 "Current match {matched:?} = {} is not yet full target {target:?}",
                 &self.text[matched.clone()]
             );
