@@ -104,9 +104,9 @@ fn stats((name, t): &(String, T), print: bool) {
 
 fn stpd() {
     env_logger::init();
-    // let t = b"BANANABAANNABBBAAANNANBANANANBANANABANNNAAANABNANNAANABBANNANA";
-    let t = b"AAAAAAAAABAAAAAAA";
-    let t = [t.as_slice(); 1].concat();
+    let t = b"BANANABAANNABBBAAANNANBANANANBANANABANNNAAANABNANNAANABBANNANA";
+    // let t = b"AAAAAAAAABAAAAAAA";
+    // let t = &[t.as_slice(); 5].concat();
     let t = &relative(100000, 4, 100, 0.001).1;
     // let t = b"BANANABBNNAABBNANAANNABBBAAANNANBANANANBANANABANNNAAANABNANNAANABBANNANAXABBBABABCBANBNANBANANABANAANNANBANABBABANANABNABANNAABBANA";
     // let t = b"AABBCABCBCBB";
