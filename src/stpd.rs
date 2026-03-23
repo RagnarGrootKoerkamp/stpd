@@ -17,7 +17,7 @@ pub struct Stpd {
     /// `spa[0]` is the 'trivial' empty anchor at the root of the text.
     // TODO: BTree instead so we can insert samples.
     // TODO: Efficient range min.
-    spa: tiered_vector::Vector<Anchor>,
+    spa: btree_vec::BTreeVec<Anchor, 32>,
 
     /// The longest suffix `text[pos-seen_before.len()..pos]` that was seen before at `text[seen_before]`.
     seen_before: Range<usize>,
@@ -70,7 +70,7 @@ impl Stpd {
         log::debug!("NEW");
         let mut stpd = Self {
             text: ByteString(vec![]),
-            spa: tiered_vector::Vector::new(),
+            spa: btree_vec::BTreeVec::create(),
             seen_before: 0..0,
             anchor_idx: 0,
             prefix_lookup: RefCell::new(Vec::from_fn(PREFIX_LEN + 1, |i| {

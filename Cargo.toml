@@ -7,6 +7,7 @@ edition = "2024"
 debug = true
 
 [dependencies]
+btree-vec = "0.3.4"
 copse = { version = "0.4.1", git = "https://github.com/kmdreko/copse", branch = "fix/is-sorted-ambiguity"}
 env_logger = "0.11.9"
 itertools = "0.14.0"
@@ -15,4 +16,3 @@ needletail = "0.6.3"
 packed-seq = "3.2.1"
 rand = "0.9.1"
 simd-minimizers = "1.1.0"
-tiered-vector = "1.0.1"

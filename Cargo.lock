@@ -74,6 +74,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "843867be96c8daad0d758b57df9392b6d8d271134fce549de6ce169ff98a92af"
 
 [[package]]
+name = "btree-vec"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d1f0be9605885985fee943dba9f91890924f9f259b96868422c6af61981af1d"
+dependencies = [
+ "tagged-pointer",
+]
+
+[[package]]
 name = "buffer-redux"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -546,9 +555,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tagged-pointer"
+version = "0.2.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a18e468a720e5b828148df765eb89eb236cd5ffd8d7f3920f9b4e286cb21ad87"
+
+[[package]]
 name = "text-indexing"
 version = "0.1.0"
 dependencies = [
+ "btree-vec",
  "copse",
  "env_logger",
  "itertools",
@@ -557,14 +573,7 @@ dependencies = [
  "packed-seq",
  "rand",
  "simd-minimizers",
- "tiered-vector",
 ]
-
-[[package]]
-name = "tiered-vector"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7bd5056137d09d70f3207d5af7ad3824be2bca36f04733de7a5d64aa4d783d51"
 
 [[package]]
 name = "unicode-ident"
