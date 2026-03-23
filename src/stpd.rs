@@ -89,7 +89,7 @@ impl Stpd {
         stpd
     }
     pub fn push(&mut self, text: &[u8]) {
-        log::debug!("Push {}", ByteStr::new(text));
+        log::info!("Push {:?}", ByteStr::new(&text[..100.min(text.len())]));
         let old_len = self.text.len();
         self.text.extend_from_slice(text);
         let text = &self.text;
@@ -118,7 +118,7 @@ impl Stpd {
                 extends += 1;
                 continue;
             }
-            log::info!("Extended {extends}\n");
+            // log::warn!("Extended {extends}\n");
             extends = 0;
             log::info!(
                 "Pos {pos} Push {}. Seen before: {}=|{seen_before:?}| with anchor {}",
@@ -166,7 +166,9 @@ impl Stpd {
                 value: encode_suffix(&text[..=pos]),
             };
 
-            log::info!("New anchor {new_anchor:?}");
+            if self.spa.len() % 1024 == 0 {
+                log::warn!("Pos {pos} New anchor {}: {new_anchor:?}", self.spa.len());
+            }
 
             // Insert anchor
             let insert_idx = self.binary_search(&text[..=pos], false, true);
@@ -242,7 +244,7 @@ impl Stpd {
         let mut anchor_idx = 0;
         let mut anchor = &self.spa[0];
         let mut seen_before = 0..0;
-        log::warn!("Binary search for suffix len 0..{h}");
+        log::info!("Binary search for suffix len 0..{h}");
         while l < h {
             let mid = (l + h + 1) / 2;
             log::debug!("l {l} mid {mid} h {h}");
@@ -290,7 +292,7 @@ impl Stpd {
 
         let mut l = 0;
         let mut h = extended.len();
-        log::warn!("exponential search for suffix len 0..{h}");
+        log::info!("exponential search for suffix len 0..{h}");
         while l < h {
             let mid = if 2 * l + 1 < h {
                 if PREFIX_LEN < h {
@@ -392,7 +394,7 @@ impl Stpd {
         // for which the just pushed character is the anchor.
         let mut anchor = &self.spa[anchor_idx];
         // TODO: Prune search once it's worse than what we see on the right.
-        log::warn!(
+        log::info!(
             "({pos}) Suffix link of {}=|{seen_before:?}| extended by {}",
             seen_before.len(),
             c as char
