@@ -1,4 +1,7 @@
 #![allow(unused)]
+#![feature(bstr)]
+
+use std::bstr::ByteStr;
 
 use text_indexing::strings::*;
 use text_indexing::{test::Test, *};
@@ -103,23 +106,65 @@ fn stats((name, t): &(String, T), print: bool) {
 }
 
 fn stpd() {
-    env_logger::Builder::from_default_env()
-        .format_timestamp_micros()
-        .init();
-    let t = b"BANANABAANNABBBAAANNANBANANANBANANABANNNAAANABNANNAANABBANNANA";
-    // let t = b"AAAAAAAAABAAAAAAA";
-    // let t = &[t.as_slice(); 5].concat();
-    let t = &relative(1_000_000, 4, 100, 0.001).1;
-    // let t = b"BANANABBNNAABBNANAANNABBBAAANNANBANANANBANANABANNNAAANABNANNAANABBANNANAXABBBABABCBANBNANBANANABANAANNANBANABBABANANABNABANNAABBANA";
-    // let t = b"AABBCABCBCBB";
-    stpd::Stpd::new(t);
+    let len = 1_000_000;
+    let start = std::time::Instant::now();
+    let t = &relative(len, 4, 320, 0.001).1;
+    let duration = start.elapsed();
+    log::error!("Gen took {duration:?}");
 
-    // RopeBWT: 65h for 320 copies of 3.2Gbp => 4.2 Mbp/s  many threads (?)
-    // us:      16s for 100 copies of 1  Mbp => 6.2 Mbp/s  1 thread
-    // us:     410s for 100 copies of 10 Mbp => 2.4 Mbp/s  1 thread
+    let mut stpd = stpd::Stpd::new(b"");
+    for t in t.chunks(len) {
+        let start = std::time::Instant::now();
+        stpd.push(t);
+        let duration = start.elapsed();
+        let mbps = (t.len() as f64) / (duration.as_secs_f64() * 1_000_000.0);
+        log::error!("{:.2} seconds ({:.2} Mbp/s)", duration.as_secs_f64(), mbps);
+    }
+
+    // RopeBWT: 65h for 320 copies of 3.2Gbp =>  4.2 Mbp/s  many threads (?)
+    // us:      16s for 100 copies of 1  Mbp =>  6.2 Mbp/s  1 thread
+    // us:     410s for 100 copies of 10 Mbp =>  2.4 Mbp/s  1 thread
+    // now:
+    // us:      10s for 100 copies of 1  Mbp => 10   Mbp/s  1 thread
+    // us:     330s for 100 copies of 10 Mbp =>  3.0 Mbp/s  1 thread
+}
+
+fn stpd_human() {
+    let mut stpd = stpd::Stpd::new(b"");
+    let mut reader = needletail::parse_fastx_file("human-genome.fa").unwrap();
+    while let Some(record) = reader.next() {
+        // Convert to ascii ABCD
+        let mut seq = record.unwrap().seq().to_vec();
+        for b in seq.iter_mut() {
+            *b = b'A' + ((*b >> 1) & 3);
+        }
+
+        let start = std::time::Instant::now();
+        stpd.push(&seq);
+        let duration = start.elapsed();
+        let mbps = (seq.len() as f64) / (duration.as_secs_f64() * 1_000_000.0);
+        log::error!(
+            "{} MB {:.2} seconds ({:.2} Mbp/s)",
+            seq.len() / 1_000_000,
+            duration.as_secs_f64(),
+            mbps
+        );
+    }
+
+    // RopeBWT: 65h for 320 copies of 3.2Gbp =>  4.2 Mbp/s  many threads (?)
+    // us:      16s for 100 copies of 1  Mbp =>  6.2 Mbp/s  1 thread
+    // us:     410s for 100 copies of 10 Mbp =>  2.4 Mbp/s  1 thread
+    // now:
+    // us:      10s for 100 copies of 1  Mbp => 10   Mbp/s  1 thread
+    // us:     330s for 100 copies of 10 Mbp =>  3.0 Mbp/s  1 thread
 }
 
 fn main() {
+    env_logger::Builder::from_default_env()
+        .format_timestamp_micros()
+        .init();
+
+    return stpd_human();
     return stpd();
 
     // newtest();
