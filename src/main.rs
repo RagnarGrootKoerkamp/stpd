@@ -107,18 +107,29 @@ fn stats((name, t): &(String, T), print: bool) {
 
 fn stpd() {
     let len = 1_000_000;
+    let r = 0.001;
+    let muts = len as f32 * r;
     let start = std::time::Instant::now();
-    let t = &relative(len, 4, 320, 0.001).1;
+    let t = &relative(len, 4, 100, r).1;
     let duration = start.elapsed();
     log::error!("Gen took {duration:?}");
 
     let mut stpd = stpd::Stpd::new(b"");
-    for t in t.chunks(len) {
+    let mut a = 1;
+    for (i, t) in t.chunks(len).enumerate() {
         let start = std::time::Instant::now();
         stpd.push(t);
         let duration = start.elapsed();
         let mbps = (t.len() as f64) / (duration.as_secs_f64() * 1_000_000.0);
-        log::error!("{:.2} seconds ({:.2} Mbp/s)", duration.as_secs_f64(), mbps);
+        let added = stpd.num_anchors() - a;
+        a = stpd.num_anchors();
+
+        log::error!(
+            "{i:>3}: {:.2} seconds ({:.2} Mbp/s)  {added:>6} new anchors {:4.1}/mut",
+            duration.as_secs_f64(),
+            mbps,
+            added as f32 / muts,
+        );
     }
 
     // RopeBWT: 65h for 320 copies of 3.2Gbp =>  4.2 Mbp/s  many threads (?)
@@ -164,7 +175,7 @@ fn main() {
         .format_timestamp_micros()
         .init();
 
-    return stpd_human();
+    // return stpd_human();
     return stpd();
 
     // newtest();

@@ -88,6 +88,9 @@ impl Stpd {
         stpd.push(text);
         stpd
     }
+    pub fn num_anchors(&self) -> usize {
+        self.spa.len()
+    }
     pub fn push(&mut self, text: &[u8]) {
         log::info!("Push {:?}", ByteStr::new(&text[..100.min(text.len())]));
         let old_len = self.text.len();
