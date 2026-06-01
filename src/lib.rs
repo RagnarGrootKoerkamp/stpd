@@ -1,5 +1,5 @@
 #![feature(gen_blocks, bstr, vec_from_fn)]
-use std::{cmp::{Ordering, Reverse}, collections::{HashMap, HashSet, hash_map::Entry}};
+use std::{cmp::{Ordering, Reverse}, collections::{BTreeSet, HashMap, HashSet, hash_map::Entry}};
 use itertools::Itertools;
 use rand::{rng, seq::SliceRandom};
 
@@ -382,7 +382,7 @@ pub fn stpd(t: &T, _sa: &SA, _lcp: &LCP, perm: &Vec<usize>) -> usize {
 }
 
 pub fn stpd_fast(t: &T, sa: &SA, lcp: &LCP, pi: &Vec<usize>) -> usize {
-    let permuted_pi = sa.iter().map(|&i| pi[i]).collect_vec();
+    const PARALLEL_THRESHOLD: usize = 100_000;
     // eprintln!("T:   {}", crate::print(t));
     // eprintln!("sa:  {sa:?}");
     // eprintln!("lcp: {lcp:?}");
@@ -392,23 +392,25 @@ pub fn stpd_fast(t: &T, sa: &SA, lcp: &LCP, pi: &Vec<usize>) -> usize {
         t: &'a T,
         sa: &'a SA,
         lcp: &'a LCP,
+        run_boundaries: BTreeSet<usize>,
         lcp_rmq: rmq_rust::BlockRmqPrecomputed<'a, 64>,
         #[allow(unused)]
         permuted_pi: &'a Vec<usize>,
         pi_rmq: rmq_rust::BlockRmqPrecomputed<'a, 64>,
-        sampled: HashSet<usize>,
-        fwd_links : HashMap::<usize, HashMap<u8, HashSet<usize>>>,
     }
 
     impl<'a> State<'a> {
-        pub fn dfs(&mut self, interval: std::ops::Range<usize>) {
-            assert!(interval.len() > 0);
-            if interval.len() == 1 {
-                return;
+        /// Split an interval into its anchor, current LCP depth, and child intervals.
+        fn split(&self, interval: std::ops::Range<usize>) -> Option<(usize, usize, Vec<std::ops::Range<usize>>)> {
+            if interval.len() <= 1 {
+                return None;
             }
+            // if contained in a single BWT run, skip.
+            if self.run_boundaries.range(interval.clone()).next().is_none() {
+                return None;
+            }
+        
             let anchor_pos = self.pi_rmq.query(interval.start, interval.end - 1).1;
-
-            // split the interval into sub-intervals by the current LCP.
             let mut done_intervals = vec![];
             let mut wip_intervals = vec![interval.clone()];
             let lcp = self.lcp[self.lcp_rmq.query(interval.start, interval.end - 2).1];
@@ -418,7 +420,7 @@ pub fn stpd_fast(t: &T, sa: &SA, lcp: &LCP, pi: &Vec<usize>) -> usize {
                     continue;
                 }
                 let split_pos = self.lcp_rmq.query(interval.start, interval.end - 2).1 + 1;
-                let new_lcp = self.lcp[split_pos-1];
+                let new_lcp = self.lcp[split_pos - 1];
                 if new_lcp > lcp {
                     done_intervals.push(interval);
                     continue;
@@ -427,56 +429,128 @@ pub fn stpd_fast(t: &T, sa: &SA, lcp: &LCP, pi: &Vec<usize>) -> usize {
                 wip_intervals.push(interval.start..split_pos);
                 wip_intervals.push(split_pos..interval.end);
             }
-            // eprintln!("Interval {interval:?} anchor {anchor_pos} value {} lcp {lcp} splits to {done_intervals:?}", self.permuted_pi[anchor_pos]);
-            for x in &done_intervals {
+            Some((anchor_pos, lcp, done_intervals))
+        }
+
+        /// Compute the sampled positions and forward links emitted at one suffix-tree node.
+        fn node_output(&self, anchor_pos: usize, lcp: usize, done_intervals: &[std::ops::Range<usize>], sampled: &mut Vec<usize>, links: &mut Vec<Link>) {
+            for x in done_intervals {
                 if !x.contains(&anchor_pos) {
                     let secondary_anchor_pos = self.pi_rmq.query(x.start, x.end - 1).1;
                     let text_idx = self.sa[secondary_anchor_pos];
                     let target = text_idx + lcp;
                     if target < self.t.len() {
-                        self.sampled.insert(target);
-                        // eprintln!("Insert min for {x:?}: sa[{anchor_pos}]  {text_idx}+{lcp}={}", target);
-                        let source= self.sa[anchor_pos] + lcp;
+                        sampled.push(target);
+                        let source = self.sa[anchor_pos] + lcp;
                         let c = self.t[target];
-                        // eprintln!("Add link from {source}={}+{lcp} to {target}={text_idx}+{lcp} for {}", self.sa[anchor_pos], c as char);
-                        self.fwd_links.entry(source).or_default().entry(c).or_default().insert(target);
+                        links.push(Link(source, c, target));
                     }
                 }
             }
+        }
+
+        /// Sequential DFS used for each leaf task from the work queue.
+        /// Results are accumulated directly into the caller-provided vecs.
+        fn dfs(&self, interval: std::ops::Range<usize>, sampled: &mut Vec<usize>, links: &mut Vec<Link>) {
+            let Some((anchor_pos, lcp, done_intervals)) = self.split(interval) else {
+                return;
+            };
+            self.node_output(anchor_pos, lcp, &done_intervals, sampled, links);
             for x in done_intervals {
-                self.dfs(x);
+                self.dfs(x, sampled, links);
+            }
+        }
+
+        /// Top-level sequential DFS: processes nodes normally until an interval falls below
+        /// PARALLEL_THRESHOLD, then pushes it onto the work queue instead of recursing.
+        fn collect_work(
+            &self,
+            interval: std::ops::Range<usize>,
+            sampled: &mut Vec<usize>,
+            links: &mut Vec<Link>,
+            work_queue: &mut Vec<std::ops::Range<usize>>,
+        ) {
+            if interval.len() < PARALLEL_THRESHOLD {
+                work_queue.push(interval);
+                return;
+            }
+            let Some((anchor_pos, lcp, done_intervals)) = self.split(interval) else {
+                return;
+            };
+            self.node_output(anchor_pos, lcp, &done_intervals, sampled, links);
+            for x in done_intervals {
+                self.collect_work(x, sampled, links, work_queue);
             }
         }
     }
 
+    let bwt = bwt(t, sa);
+    // indices where new runs start
+    let run_boundaries = (0..t.len()-1).tuple_windows().filter(|(i, j)| bwt[*i] != bwt[*j]).map(|(i,j)| i).collect_vec();
+    let run_boundaries = std::collections::BTreeSet::from_iter(run_boundaries);
+
+    let permuted_pi = sa.iter().map(|&i| pi[i]).collect_vec();
+
     use rmq_rust::Rmq as _;
     let lcp_u64: Vec<u64> = lcp.iter().map(|&x| x as u64).collect();
     let ppi_u64: Vec<u64> = permuted_pi.iter().map(|&x| x as u64).collect();
-    let mut state = State {
+    let state = State {
         t,
         sa,
         lcp,
+        run_boundaries,
         lcp_rmq: rmq_rust::BlockRmqPrecomputed::<64>::build(&lcp_u64),
         pi_rmq: rmq_rust::BlockRmqPrecomputed::<64>::build(&ppi_u64),
         permuted_pi: &permuted_pi,
-        sampled: HashSet::new(),
-        fwd_links: HashMap::new(),
     };
 
-    state.dfs(0..t.len());
+    // Phase 1: sequential DFS collecting top-level results and a queue of leaf intervals.
+    let mut sampled_vec = vec![];
+    let mut links_vec = vec![];
+    let mut work_queue = vec![];
+    state.collect_work(0..t.len(), &mut sampled_vec, &mut links_vec, &mut work_queue);
 
-    eprint!("STPD samples:  {:>5}  | ", state.sampled.len());
-    // eprint!("Branch points: {:>5}  | ", branch_points.len());
-    // eprint!("Parents:       {:>5}  | ", parents.len());
-    eprint!("Links 1:         {:>5}  | ", state.fwd_links.values().len());
-    eprint!("Links 2:         {:>5}  | ", state.fwd_links.values().map(|m| m.len()).sum::<usize>());
-    let l3 = state.fwd_links.values().map(|m|m.values().map(|x|x.len()).sum::<usize>()).sum:: <usize>();
-    eprint!("Links 3:         {l3:>5}  | ");
-    let l3max = state.fwd_links.values().map(|m|m.values().map(|x|x.len()).max().unwrap()).max().unwrap();
-    eprint!("max:         {l3max:>5}  | ");
-    eprintln!(" {:1.4}x", l3 as f32 / state.sampled.len() as f32);
-    state.sampled.len()
+    // Phase 2: process leaf intervals in parallel using Rayon's thread pool.
+    // Each worker accumulates its results into a single pair of vecs.
+    use rayon::prelude::*;
+    let child_results: Vec<(Vec<usize>, Vec<Link>)> = work_queue
+        .into_par_iter()
+        .map(|interval| {
+            let mut sampled = vec![];
+            let mut links = vec![];
+            state.dfs(interval, &mut sampled, &mut links);
+            (sampled, links)
+        })
+        .collect();
+    for (s, l) in child_results {
+        sampled_vec.extend(s);
+        links_vec.extend(l);
+    }
 
+    #[derive(Copy, PartialEq, PartialOrd, Clone)]
+    struct Link(usize, u8, usize);
+    impl voracious_radix_sort::Radixable<u128> for Link {
+        type Key = u128;
+
+        fn key(&self) -> Self::Key {
+            ((self.0 as u128) << 72) | ((self.1 as u128) << 64) | (self.2 as u128)
+        }
+    }
+
+    use voracious_radix_sort::RadixSort;
+    sampled_vec.voracious_mt_sort(12);
+    links_vec.voracious_mt_sort(12);
+
+    let num_sampled = 1 + sampled_vec.iter().tuple_windows().filter(|(a, b)| a != b).count();
+    let num_sources = 1 + links_vec.iter().tuple_windows().filter(|(a, b)| a.0 != b.0).count();
+    let num_source_chars = 1 + links_vec.iter().tuple_windows().filter(|(a, b)| (a.0, a.1) != (b.0, b.1)).count();
+    let num_links = 1 + links_vec.iter().tuple_windows().filter(|(a, b)| a != b).count();
+
+    eprint!(" {:>5.2}  | ", num_sampled as f32 / 1000000.);
+    eprint!(" {:>5.2}  | ", num_sources as f32 / 1000000.);
+    eprint!(" {:>5.2}  | ", num_source_chars as f32 / 1000000.);
+    eprintln!(" {:>5.2}  | ", num_links as f32 / 1000000.);
+    num_sampled
 }
 
 pub fn stpd_pos_minus(t: &T, sa: &SA, lcp: &LCP) -> usize {

@@ -7,6 +7,7 @@ use text_indexing::strings::*;
 use text_indexing::{test::Test, *};
 
 fn header() {
+    return;
     let name = "name";
     let n = "n";
     let r = "r";
@@ -40,7 +41,6 @@ fn header() {
 }
 
 fn stats((name, t): &(String, T), print: bool) {
-    eprintln!("{name}: {}", t.len());
     if print {
         eprintln!("T: {}", crate::print(t));
     }
@@ -76,7 +76,6 @@ fn stats((name, t): &(String, T), print: bool) {
 
     let bwt = &bwt(t, sa);
     let r = r(bwt);
-    eprintln!("{name:>40}  {n:>4}  {r:>4}");
 
     // // slow
     // let (delta, delta_k) = delta(t);
@@ -88,10 +87,14 @@ fn stats((name, t): &(String, T), print: bool) {
     // let chi_pd2 = chi_pd2(t, sa, lcp);
     // // slow
 
+    let n = n as f32 / 1000000.;
+    let r = r as f32 / 1000000.;
+    eprint!("| {name} | {n:>6.2} | {r:>6.2} | pos-   | ");
     let stpd_pos_minus = stpd_pos_minus(t, sa, lcp);
+    eprint!("| {name} | {n:>6.2} | {r:>6.2} | lex-   | ");
     let stpd_lex_minus = stpd_lex_minus(t, sa, lcp);
+    eprint!("| {name} | {n:>6.2} | {r:>6.2} | colex- | ");
     let stpd_colex_minus = stpd_colex_minus(t, sa, lcp);
-    let stpd_rand = stpd_rand(t, sa, lcp);
 
     // // let plcp = plcp(t, sa, lcp);
 
@@ -229,16 +232,16 @@ fn main() {
             // relative(100, 4, 20, 0.01),
             // relative(100, 4, 40, 0.01),
             // relative(10, 4, 1, 0.01),
-            relative(10, 4, 2, 0.01),
-            relative(10, 4, 4, 0.01),
-            relative(10, 4, 8, 0.01),
-            relative(500, 2, 1, 0.01),
-            relative(500, 2, 2, 0.01),
-            relative(500, 2, 4, 0.01),
+            // relative(10, 4, 2, 0.01),
+            // relative(10, 4, 4, 0.01),
+            // relative(10, 4, 8, 0.01),
+            // relative(500, 2, 1, 0.01),
+            // relative(500, 2, 2, 0.01),
+            // relative(500, 2, 4, 0.01),
             // relative(500, 2, 8, 0.01),
-            relative(500, 4, 1, 0.01),
-            relative(500, 4, 2, 0.01),
-            relative(500, 4, 4, 0.01),
+            // relative(500, 4, 1, 0.01),
+            // relative(500, 4, 2, 0.01),
+            // relative(500, 4, 4, 0.01),
             // relative(500, 4, 8, 0.01),
             // relative(500, 4, 16, 0.01),
             // relative(100000, 4, 1, 0.00),
