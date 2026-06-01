@@ -409,10 +409,10 @@ pub fn stpd_fast(t: &T, sa: &SA, lcp: &LCP, pi: &Vec<usize>) -> usize {
         t: &'a T,
         sa: &'a SA,
         lcp: &'a LCP,
-        lcp_rmq: range_minimum_query::Rmq,
+        lcp_rmq: rmq_rust::BlockRmqPrecomputed<'a, 64>,
         #[allow(unused)]
-        permuted_pi: Vec<usize>,
-        pi_rmq: range_minimum_query::Rmq,
+        permuted_pi: &'a Vec<usize>,
+        pi_rmq: rmq_rust::BlockRmqPrecomputed<'a, 64>,
         sampled: HashSet<usize>,
         fwd_links : HashMap::<usize, HashMap<u8, HashSet<usize>>>,
     }
@@ -423,18 +423,18 @@ pub fn stpd_fast(t: &T, sa: &SA, lcp: &LCP, pi: &Vec<usize>) -> usize {
             if interval.len() == 1 {
                 return;
             }
-            let anchor_pos = self.pi_rmq.range_minimum(interval.clone()).unwrap();
+            let anchor_pos = self.pi_rmq.query(interval.start, interval.end - 1).1;
 
             // split the interval into sub-intervals by the current LCP.
             let mut done_intervals = vec![];
             let mut wip_intervals = vec![interval.clone()];
-            let lcp = self.lcp[self.lcp_rmq.range_minimum(interval.start..interval.end-1).unwrap()];
+            let lcp = self.lcp[self.lcp_rmq.query(interval.start, interval.end - 2).1];
             while let Some(interval) = wip_intervals.pop() {
                 if interval.len() <= 1 {
                     done_intervals.push(interval);
                     continue;
                 }
-                let split_pos = self.lcp_rmq.range_minimum(interval.start..interval.end-1).unwrap()+1;
+                let split_pos = self.lcp_rmq.query(interval.start, interval.end - 2).1 + 1;
                 let new_lcp = self.lcp[split_pos-1];
                 if new_lcp > lcp {
                     done_intervals.push(interval);
@@ -447,7 +447,7 @@ pub fn stpd_fast(t: &T, sa: &SA, lcp: &LCP, pi: &Vec<usize>) -> usize {
             // eprintln!("Interval {interval:?} anchor {anchor_pos} value {} lcp {lcp} splits to {done_intervals:?}", self.permuted_pi[anchor_pos]);
             for x in &done_intervals {
                 if !x.contains(&anchor_pos) {
-                    let secondary_anchor_pos = self.pi_rmq.range_minimum(x.clone()).unwrap();
+                    let secondary_anchor_pos = self.pi_rmq.query(x.start, x.end - 1).1;
                     let text_idx = self.sa[secondary_anchor_pos];
                     let target = text_idx + lcp;
                     if target < self.t.len() {
@@ -466,16 +466,21 @@ pub fn stpd_fast(t: &T, sa: &SA, lcp: &LCP, pi: &Vec<usize>) -> usize {
         }
     }
 
+    eprintln!("Building RMQs..");
+    use rmq_rust::Rmq as _;
+    let lcp_u64: Vec<u64> = lcp.iter().map(|&x| x as u64).collect();
+    let ppi_u64: Vec<u64> = permuted_pi.iter().map(|&x| x as u64).collect();
     let mut state = State {
         t,
         sa,
         lcp,
-        lcp_rmq: range_minimum_query::Rmq::from_iter(lcp),
-        pi_rmq: range_minimum_query::Rmq::from_iter(&permuted_pi),
-        permuted_pi,
+        lcp_rmq: rmq_rust::BlockRmqPrecomputed::<64>::build(&lcp_u64),
+        pi_rmq: rmq_rust::BlockRmqPrecomputed::<64>::build(&ppi_u64),
+        permuted_pi: &permuted_pi,
         sampled: HashSet::new(),
         fwd_links: HashMap::new(),
     };
+    eprintln!("Building done.");
 
     state.dfs(0..t.len());
 

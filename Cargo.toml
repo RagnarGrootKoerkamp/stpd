@@ -15,6 +15,6 @@ log = "0.4.29"
 needletail = "0.6.3"
 packed-seq = "3.2.1"
 rand = "0.9.1"
-range_minimum_query = "0.2.0"
+rmq-rust = { version = "0.1.0", path = "../rmq-project/rmq-rust" }
 simd-minimizers = "1.1.0"
 tiered-vector = "1.0.1"
