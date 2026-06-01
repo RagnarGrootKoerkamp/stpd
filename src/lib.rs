@@ -2,6 +2,7 @@
 use std::{cmp::{Ordering, Reverse}, collections::{BTreeSet, HashMap, HashSet, hash_map::Entry}};
 use itertools::Itertools;
 use rand::{rng, seq::SliceRandom};
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 pub mod strings;
 pub mod test;
@@ -72,9 +73,9 @@ pub fn sa_and_lcp(t: &T) -> (SA, LCP) {
 }
 
 pub fn bwt(t: &T, sa: &SA) -> T {
-    sa.iter()
+    sa.par_iter()
         .map(|&i| t[if i == 0 { t.len() - 1 } else { i - 1 }])
-        .collect_vec()
+        .collect()
 }
 
 /// Number of BWT runs.
@@ -381,7 +382,7 @@ pub fn stpd(t: &T, _sa: &SA, _lcp: &LCP, perm: &Vec<usize>) -> usize {
     sampled.len()
 }
 
-pub fn stpd_fast(t: &T, sa: &SA, lcp: &LCP, pi: &Vec<usize>) -> usize {
+pub fn stpd_fast(t: &T, sa: &SA, bwt: &T, lcp: &LCP, pi: &Vec<usize>) -> usize {
     const PARALLEL_THRESHOLD: usize = 100_000;
     // eprintln!("T:   {}", crate::print(t));
     // eprintln!("sa:  {sa:?}");
@@ -393,10 +394,10 @@ pub fn stpd_fast(t: &T, sa: &SA, lcp: &LCP, pi: &Vec<usize>) -> usize {
         sa: &'a SA,
         lcp: &'a LCP,
         run_boundaries: BTreeSet<usize>,
-        lcp_rmq: rmq_rust::BlockRmqPrecomputed<'a, 64>,
+        lcp_rmq: rmq_rust::BlockRmq<'a, 128>,
         #[allow(unused)]
         permuted_pi: &'a Vec<usize>,
-        pi_rmq: rmq_rust::BlockRmqPrecomputed<'a, 64>,
+        pi_rmq: rmq_rust::BlockRmq<'a, 128>,
     }
 
     impl<'a> State<'a> {
@@ -406,6 +407,8 @@ pub fn stpd_fast(t: &T, sa: &SA, lcp: &LCP, pi: &Vec<usize>) -> usize {
                 return None;
             }
             // if contained in a single BWT run, skip.
+            // FIXME: We loose 1-2 samples with this. Find out exactly which.
+            // NOTE: Understand why we can't move this into the loop below.
             if self.run_boundaries.range(interval.clone()).next().is_none() {
                 return None;
             }
@@ -484,12 +487,11 @@ pub fn stpd_fast(t: &T, sa: &SA, lcp: &LCP, pi: &Vec<usize>) -> usize {
         }
     }
 
-    let bwt = bwt(t, sa);
     // indices where new runs start
-    let run_boundaries = (0..t.len()-1).tuple_windows().filter(|(i, j)| bwt[*i] != bwt[*j]).map(|(i,j)| i).collect_vec();
+    let run_boundaries = (0..t.len()-1).tuple_windows().filter(|(i, j)| bwt[*i] != bwt[*j]).map(|(i,_j)| i).collect_vec();
     let run_boundaries = std::collections::BTreeSet::from_iter(run_boundaries);
 
-    let permuted_pi = sa.iter().map(|&i| pi[i]).collect_vec();
+    let permuted_pi: Vec<usize> = sa.par_iter().map(|&i| pi[i]).collect();
 
     use rmq_rust::Rmq as _;
     let lcp_u64: Vec<u64> = lcp.iter().map(|&x| x as u64).collect();
@@ -499,8 +501,8 @@ pub fn stpd_fast(t: &T, sa: &SA, lcp: &LCP, pi: &Vec<usize>) -> usize {
         sa,
         lcp,
         run_boundaries,
-        lcp_rmq: rmq_rust::BlockRmqPrecomputed::<64>::build(&lcp_u64),
-        pi_rmq: rmq_rust::BlockRmqPrecomputed::<64>::build(&ppi_u64),
+        lcp_rmq: rmq_rust::BlockRmq::build(&lcp_u64),
+        pi_rmq: rmq_rust::BlockRmq::build(&ppi_u64),
         permuted_pi: &permuted_pi,
     };
 
@@ -546,62 +548,64 @@ pub fn stpd_fast(t: &T, sa: &SA, lcp: &LCP, pi: &Vec<usize>) -> usize {
     let num_source_chars = 1 + links_vec.iter().tuple_windows().filter(|(a, b)| (a.0, a.1) != (b.0, b.1)).count();
     let num_links = 1 + links_vec.iter().tuple_windows().filter(|(a, b)| a != b).count();
 
-    eprint!(" {:>5.2}  | ", num_sampled as f32 / 1000000.);
-    eprint!(" {:>5.2}  | ", num_sources as f32 / 1000000.);
-    eprint!(" {:>5.2}  | ", num_source_chars as f32 / 1000000.);
-    eprintln!(" {:>5.2}  | ", num_links as f32 / 1000000.);
+    let c = 1000000.;
+    let c = 1.;
+    eprint!(" {:>5.2}  | ", num_sampled as f32 / c);
+    eprint!(" {:>5.2}  | ", num_sources as f32 / c);
+    eprint!(" {:>5.2}  | ", num_source_chars as f32 / c);
+    eprintln!(" {:>5.2}  | ", num_links as f32 / c);
     num_sampled
 }
 
-pub fn stpd_pos_minus(t: &T, sa: &SA, lcp: &LCP) -> usize {
+pub fn stpd_pos_minus(t: &T, sa: &SA, bwt: &T, lcp: &LCP) -> usize {
     let perm = (0..t.len()).collect_vec();
-    stpd_fast(t, sa, lcp, &perm)
+    stpd_fast(t, sa, bwt, lcp, &perm)
 }
 
-pub fn stpd_pos_plus(t: &T, sa: &SA, lcp: &LCP) -> usize {
+pub fn stpd_pos_plus(t: &T, sa: &SA,  bwt: &T,lcp: &LCP) -> usize {
     let perm = (0..t.len()).rev().collect_vec();
-    stpd_fast(t, sa, lcp, &perm)
+    stpd_fast(t, sa, bwt, lcp, &perm)
 }
 
-pub fn stpd_lex_minus(t: &T, sa: &SA, lcp: &LCP) -> usize {
+pub fn stpd_lex_minus(t: &T, sa: &SA,  bwt: &T,lcp: &LCP) -> usize {
     let mut isa = vec![0; t.len()];
     for (i, &x) in sa.iter().enumerate(){
         isa[x] = i;
     }
-    stpd_fast(t, sa, lcp, &isa)
+    stpd_fast(t, sa, bwt, lcp, &isa)
 }
 
-pub fn stpd_lex_plus(t: &T, sa: &SA, lcp: &LCP) -> usize {
+pub fn stpd_lex_plus(t: &T, sa: &SA,  bwt: &T,lcp: &LCP) -> usize {
     let mut isa = vec![0; t.len()];
     for (i, &x) in sa.iter().enumerate(){
         isa[x] = t.len()-1-i;
     }
-    stpd_fast(t, sa, lcp, &isa)
+    stpd_fast(t, sa, bwt, lcp, &isa)
 }
 
-pub fn stpd_colex_minus(t: &T, sa: &SA, lcp: &LCP) -> usize {
+pub fn stpd_colex_minus(t: &T, sa: &SA,  bwt: &T,lcp: &LCP) -> usize {
     let co_sa = co_sa(t);
     let mut i_co_sa = vec![0; t.len()];
     for (i, &x) in co_sa.iter().enumerate(){
         i_co_sa[x] = i;
     }
-    stpd_fast(t, sa, lcp, &i_co_sa)
+    stpd_fast(t, sa, bwt, lcp, &i_co_sa)
 }
 
-pub fn stpd_colex_plus(t: &T, sa: &SA, lcp: &LCP) -> usize {
+pub fn stpd_colex_plus(t: &T, sa: &SA,  bwt: &T,lcp: &LCP) -> usize {
     let co_sa = co_sa(t);
     let mut i_co_sa = vec![0; t.len()];
     for (i, &x) in co_sa.iter().enumerate(){
         i_co_sa[x] = t.len()-1-i;
     }
-    stpd_fast(t, sa, lcp, &i_co_sa)
+    stpd_fast(t, sa, bwt, lcp, &i_co_sa)
 }
 
 
-pub fn stpd_rand(t: &T, sa: &SA, lcp: &LCP) -> usize {
+pub fn stpd_rand(t: &T, sa: &SA, bwt: &T, lcp: &LCP) -> usize {
     let mut perm = (0..t.len()).collect_vec();
     perm.shuffle(&mut rng());
-    stpd_fast(t, sa, lcp, &perm)
+    stpd_fast(t, sa, bwt, lcp, &perm)
 }
 
 pub fn plcp(t: &T, sa: &SA, lcp: &LCP) -> usize {

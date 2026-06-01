@@ -90,11 +90,11 @@ fn stats((name, t): &(String, T), print: bool) {
     let n = n as f32 / 1000000.;
     let r = r as f32 / 1000000.;
     eprint!("| {name} | {n:>6.2} | {r:>6.2} | pos-   | ");
-    let stpd_pos_minus = stpd_pos_minus(t, sa, lcp);
+    let stpd_pos_minus = stpd_pos_minus(t, sa, bwt, lcp);
     eprint!("| {name} | {n:>6.2} | {r:>6.2} | lex-   | ");
-    let stpd_lex_minus = stpd_lex_minus(t, sa, lcp);
+    let stpd_lex_minus = stpd_lex_minus(t, sa, bwt, lcp);
     eprint!("| {name} | {n:>6.2} | {r:>6.2} | colex- | ");
-    let stpd_colex_minus = stpd_colex_minus(t, sa, lcp);
+    let stpd_colex_minus = stpd_colex_minus(t, sa, bwt, lcp);
 
     // // let plcp = plcp(t, sa, lcp);
 
