@@ -45,7 +45,7 @@ fn stats((name, t): &(String, T), print: bool) {
     }
     let n = t.len();
     let sa = &sa(t);
-    // let lcp = &lcp(t, sa);
+    let lcp = &lcp(t, sa);
 
     // let mut nodes = 0;
     // let mut node_depth = 0;
@@ -88,9 +88,10 @@ fn stats((name, t): &(String, T), print: bool) {
     // let chi_pd2 = chi_pd2(t, sa, lcp);
     // // slow
 
-    // let stpd_pos_minus = stpd_pos_minus(t, sa, lcp);
-    // // let stpd_pos_plus = stpd_pos_plus(t, sa, lcp);
+    let stpd_pos_minus = stpd_pos_minus(t, sa, lcp);
+    // FIXME
     // let stpd_lex_minus = stpd_lex_minus(t, sa, lcp);
+
     // // let stpd_lex_plus = stpd_lex_plus(t, sa, lcp);
     // // let stpd_colex_minus = stpd_colex_minus(t, sa, lcp);
     // // let stpd_colex_plus = stpd_colex_plus(t, sa, lcp);
