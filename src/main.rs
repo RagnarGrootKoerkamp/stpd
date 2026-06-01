@@ -89,13 +89,9 @@ fn stats((name, t): &(String, T), print: bool) {
     // // slow
 
     let stpd_pos_minus = stpd_pos_minus(t, sa, lcp);
-    // FIXME
-    // let stpd_lex_minus = stpd_lex_minus(t, sa, lcp);
-
-    // // let stpd_lex_plus = stpd_lex_plus(t, sa, lcp);
-    // // let stpd_colex_minus = stpd_colex_minus(t, sa, lcp);
-    // // let stpd_colex_plus = stpd_colex_plus(t, sa, lcp);
-    // // let stpd_rand = stpd_rand(t, sa, lcp);
+    let stpd_lex_minus = stpd_lex_minus(t, sa, lcp);
+    let stpd_colex_minus = stpd_colex_minus(t, sa, lcp);
+    let stpd_rand = stpd_rand(t, sa, lcp);
 
     // // let plcp = plcp(t, sa, lcp);
 

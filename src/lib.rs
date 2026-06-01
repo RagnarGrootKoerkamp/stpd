@@ -32,26 +32,9 @@ pub fn sa(t: &T) -> SA {
 }
 
 fn co_sa(t: &T) -> Vec<usize> {
-    let mut co_sa = (0..t.len()).collect_vec();
-    co_sa.sort_by(|&i, &j|{
-        let mut i = i + 1;
-        let mut j = j + 1;
-        while i > 0 && j > 0{
-            if t[i-1] != t[j-1] {
-                return t[i-1].cmp(&t[j-1]);
-            }
-            i -= 1;
-            j -= 1;
-        }
-        if i == 0 {
-            return Ordering::Less;
-        }
-        if j == 0 {
-            return Ordering::Greater;
-        }
-        unreachable!()
-    });
-    co_sa
+    let tr = t.iter().rev().copied().collect_vec();
+    let co_sa = sa(&tr);
+    co_sa.into_iter().map(|x| t.len() - 1 - x).collect_vec()
 }
 
 pub fn sa_and_lcp(t: &T) -> (SA, LCP) {
@@ -466,7 +449,6 @@ pub fn stpd_fast(t: &T, sa: &SA, lcp: &LCP, pi: &Vec<usize>) -> usize {
         }
     }
 
-    eprintln!("Building RMQs..");
     use rmq_rust::Rmq as _;
     let lcp_u64: Vec<u64> = lcp.iter().map(|&x| x as u64).collect();
     let ppi_u64: Vec<u64> = permuted_pi.iter().map(|&x| x as u64).collect();
@@ -480,7 +462,6 @@ pub fn stpd_fast(t: &T, sa: &SA, lcp: &LCP, pi: &Vec<usize>) -> usize {
         sampled: HashSet::new(),
         fwd_links: HashMap::new(),
     };
-    eprintln!("Building done.");
 
     state.dfs(0..t.len());
 
