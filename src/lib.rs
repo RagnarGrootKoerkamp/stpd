@@ -1,5 +1,5 @@
 #![feature(gen_blocks, bstr, vec_from_fn)]
-use std::{cmp::{Ordering, Reverse}, collections::{HashMap, HashSet}};
+use std::{cmp::{Ordering, Reverse}, collections::{HashMap, HashSet, hash_map::Entry}};
 use itertools::Itertools;
 use rand::{rng, seq::SliceRandom};
 
@@ -12,7 +12,11 @@ pub type SA = Vec<usize>;
 pub type LCP = Vec<usize>;
 
 pub fn print(t: &[u8]) -> String {
-    String::from_utf8(t.iter().map(|c| b'0' + c).collect_vec()).unwrap()
+    if t[0] <= 4 {
+        String::from_utf8(t.iter().map(|c| b'0' + c).collect_vec()).unwrap()
+    } else {
+        String::from_utf8(t.to_vec()).unwrap()
+    }
 }
 
 pub fn sa(t: &T) -> SA {
@@ -279,55 +283,67 @@ pub fn stpd(t: &T, _sa: &SA, _lcp: &LCP, perm: &Vec<usize>) -> usize {
     // Map substrings to (sampled STPD pos, end)
     let mut seen = HashMap::<&[u8], (usize,usize)>::new();
 
-    // Map sampled STPD pos to (min length, max length, children, parents, suffix links)
-    let mut sampled = HashMap::<usize, (usize, usize, HashSet<usize>, Vec<(usize,usize)>, Vec<(usize, usize)>)>::new();
+    for i in 0..=t.len() {
+        seen.insert(&t[0..i], (0,i));
+    }
 
-    let mut branch_points = HashSet::new();
-    let mut parents = HashSet::new();
+    // Map sampled STPD pos to (min length, max length, children, parents, suffix links, forward links)
+    let mut sampled = HashMap::<usize, (usize, usize, HashSet<usize>, Vec<(usize,usize)>, Vec<(usize, usize)>)>::new();
+    let mut fwd_links = HashMap::<usize, HashMap<u8, HashSet<usize>>>::new();
+
+    // let mut branch_points = HashSet::new();
+    // let mut parents = HashSet::new();
     // let mut suffix_links = HashSet::new();
 
+    // eprintln!("T: {}", crate::print(t));
     for len in 1..=t.len(){
         for &pos in &iperm {
             if pos < len-1 {continue;}
             let start = pos-len+1;
+            // eprintln!("t[{:?}] = {}", start..=pos, crate::print(&t[start..=pos]));
             let e = &t[start..=pos];
             if seen.contains_key(e) {
                 continue;
             }
+            // eprintln!("pos {pos:>2}: First time seeing {}", crate::print(e));
 
             // Add STPD element.
             let e = sampled.entry(pos).or_insert((len, len, Default::default(), vec![], Default::default()));
             // Update max len at current sample.
             e.1 = len;
 
-            let mut last_sl = usize::MAX;
-            let mut cnt = 0;
+            // let mut last_sl = usize::MAX;
+            // let mut cnt = 0;
             for end in pos+1..=t.len(){
                 // Mark seqs starting here as seen.
                 seen.insert(&t[start..end], (pos, end));
 
                 // Add suffix links.
-                if let Some(&(parent_pos, _parent_end)) = seen.get(&t[start+1..end]) {
-                    if parent_pos != last_sl && end-1 != pos {
-                        // Add suffix link to parent.
-                        e.4.push((end-1, parent_pos));
-                        cnt += 1;
-                        // Add suffix link to parent.
-                        // suffix_links.insert();
-                    }
-                        last_sl = parent_pos;
-                }
+                // if let Some(&(parent_pos, _parent_end)) = seen.get(&t[start+1..end]) {
+                //     if parent_pos != last_sl && end-1 != pos {
+                //         // Add suffix link to parent.
+                //         e.4.push((end-1, parent_pos));
+                //         cnt += 1;
+                //         // Add suffix link to parent.
+                //         // suffix_links.insert();
+                //     }
+                //         last_sl = parent_pos;
+                // }
             }
-            assert!(cnt <= 2, "CNT: {cnt} at {pos}");
+            // assert!(cnt <= 2, "CNT: {cnt} at {pos}");
 
-            if let Some((parent_pos, parent_end)) = seen.get(&t[start..pos]) {
+            if let Some((_parent_pos, parent_end)) = seen.get(&t[start..pos]) {
                 // Add parent of this sample.
-                e.3.push((len-1, *parent_pos));
-                parents.insert((pos, *parent_pos));
+                // e.3.push((len-1, *parent_pos));
+                // parents.insert((pos, *parent_pos));
 
                 // Add this as child of previous sample.
-                sampled.get_mut(parent_pos).unwrap().2.insert(parent_end+1);
-                branch_points.insert(parent_end+1);
+                // sampled.get_mut(parent_pos).unwrap().2.insert(parent_end+1);
+                // branch_points.insert(parent_end+1);
+
+                // eprintln!("Parent {_parent_pos}..{parent_end}: {} => {pos}", t[pos]);
+                // eprintln!("Add link from {parent_end} to {pos} for {}", t[pos] as char);
+                fwd_links.entry(*parent_end).or_default().entry(t[pos]).or_default().insert(pos);
             }
 
         }
@@ -335,22 +351,128 @@ pub fn stpd(t: &T, _sa: &SA, _lcp: &LCP, perm: &Vec<usize>) -> usize {
 
     let mut sampled = sampled.into_iter().collect_vec();
     sampled.sort_unstable_by_key(|(pos, _)| *pos);
-    println!("{sampled:?}");
-    eprintln!("STPD samples:  {:?}", sampled.len());
-    eprintln!("Branch points: {:?}", branch_points.len());
-    eprintln!("Parents:       {:?}", parents.len());
+    // eprintln!("T: {}", crate::print(t));
+    // for (pos, (min_len, max_len, children, parents, suffix_links)) in &sampled {
+    //     eprintln!("{pos}: {min_len}..{max_len}  children: {:?}  parents: {:?}  suffix_links: {:?}", children, parents, suffix_links);
+    // }
+    // println!("{sampled:?}");
+    eprint!("STPD samples:  {:>5}  | ", sampled.len());
+    // eprint!("Branch points: {:>5}  | ", branch_points.len());
+    // eprint!("Parents:       {:>5}  | ", parents.len());
+    eprint!("Links 1:         {:>5}  | ", fwd_links.values().len());
+    eprint!("Links 2:         {:>5}  | ", fwd_links.values().map(|m| m.len()).sum::<usize>());
+    let l3 = fwd_links.values().map(|m|m.values().map(|x|x.len()).sum::<usize>()).sum:: <usize>();
+    eprint!("Links 3:         {l3:>5}  | ");
+    let l3max = fwd_links.values().map(|m|m.values().map(|x|x.len()).max().unwrap()).max().unwrap();
+    eprint!("max:         {l3max:>5}  | ");
+    eprintln!(" {:1.4}x", l3 as f32 / sampled.len() as f32);
     // eprintln!("Suffix links:  {:?}", suffix_links.len());
     sampled.len()
 }
 
+pub fn stpd_fast(t: &T, sa: &SA, lcp: &LCP, pi: &Vec<usize>) -> usize {
+    let permuted_pi = sa.iter().map(|&i| pi[i]).collect_vec();
+    // eprintln!("T:   {}", crate::print(t));
+    // eprintln!("sa:  {sa:?}");
+    // eprintln!("lcp: {lcp:?}");
+    // eprintln!("pi:  {pi:?}");
+    // eprintln!("ppi: {permuted_pi:?}");
+    struct State<'a> {
+        t: &'a T,
+        sa: &'a SA,
+        lcp: &'a LCP,
+        lcp_rmq: range_minimum_query::Rmq,
+        #[allow(unused)]
+        permuted_pi: Vec<usize>,
+        pi_rmq: range_minimum_query::Rmq,
+        sampled: HashSet<usize>,
+        fwd_links : HashMap::<usize, HashMap<u8, HashSet<usize>>>,
+    }
+
+    impl<'a> State<'a> {
+        pub fn dfs(&mut self, interval: std::ops::Range<usize>) {
+            assert!(interval.len() > 0);
+            if interval.len() == 1 {
+                return;
+            }
+            let anchor_pos = self.pi_rmq.range_minimum(interval.clone()).unwrap();
+
+            // split the interval into sub-intervals by the current LCP.
+            let mut done_intervals = vec![];
+            let mut wip_intervals = vec![interval.clone()];
+            let lcp = self.lcp[self.lcp_rmq.range_minimum(interval.start..interval.end-1).unwrap()];
+            while let Some(interval) = wip_intervals.pop() {
+                if interval.len() <= 1 {
+                    done_intervals.push(interval);
+                    continue;
+                }
+                let split_pos = self.lcp_rmq.range_minimum(interval.start..interval.end-1).unwrap()+1;
+                let new_lcp = self.lcp[split_pos-1];
+                if new_lcp > lcp {
+                    done_intervals.push(interval);
+                    continue;
+                }
+                assert!(new_lcp == lcp);
+                wip_intervals.push(interval.start..split_pos);
+                wip_intervals.push(split_pos..interval.end);
+            }
+            // eprintln!("Interval {interval:?} anchor {anchor_pos} value {} lcp {lcp} splits to {done_intervals:?}", self.permuted_pi[anchor_pos]);
+            for x in &done_intervals {
+                if !x.contains(&anchor_pos) {
+                    let secondary_anchor_pos = self.pi_rmq.range_minimum(x.clone()).unwrap();
+                    let text_idx = self.sa[secondary_anchor_pos];
+                    let target = text_idx + lcp;
+                    if target < self.t.len() {
+                        self.sampled.insert(target);
+                        // eprintln!("Insert min for {x:?}: sa[{anchor_pos}]  {text_idx}+{lcp}={}", target);
+                        let source= self.sa[anchor_pos] + lcp;
+                        let c = self.t[target];
+                        // eprintln!("Add link from {source}={}+{lcp} to {target}={text_idx}+{lcp} for {}", self.sa[anchor_pos], c as char);
+                        self.fwd_links.entry(source).or_default().entry(c).or_default().insert(target);
+                    }
+                }
+            }
+            for x in done_intervals {
+                self.dfs(x);
+            }
+        }
+    }
+
+    let mut state = State {
+        t,
+        sa,
+        lcp,
+        lcp_rmq: range_minimum_query::Rmq::from_iter(lcp),
+        pi_rmq: range_minimum_query::Rmq::from_iter(&permuted_pi),
+        permuted_pi,
+        sampled: HashSet::new(),
+        fwd_links: HashMap::new(),
+    };
+
+    state.dfs(0..t.len());
+
+    eprint!("STPD samples:  {:>5}  | ", state.sampled.len());
+    // eprint!("Branch points: {:>5}  | ", branch_points.len());
+    // eprint!("Parents:       {:>5}  | ", parents.len());
+    eprint!("Links 1:         {:>5}  | ", state.fwd_links.values().len());
+    eprint!("Links 2:         {:>5}  | ", state.fwd_links.values().map(|m| m.len()).sum::<usize>());
+    let l3 = state.fwd_links.values().map(|m|m.values().map(|x|x.len()).sum::<usize>()).sum:: <usize>();
+    eprint!("Links 3:         {l3:>5}  | ");
+    let l3max = state.fwd_links.values().map(|m|m.values().map(|x|x.len()).max().unwrap()).max().unwrap();
+    eprint!("max:         {l3max:>5}  | ");
+    eprintln!(" {:1.4}x", l3 as f32 / state.sampled.len() as f32);
+    state.sampled.len()
+
+}
+
 pub fn stpd_pos_minus(t: &T, sa: &SA, lcp: &LCP) -> usize {
     let perm = (0..t.len()).collect_vec();
-    stpd(t, sa, lcp, &perm)
+    stpd_fast(t, sa, lcp, &perm)
 }
 
 pub fn stpd_pos_plus(t: &T, sa: &SA, lcp: &LCP) -> usize {
     let perm = (0..t.len()).rev().collect_vec();
-    stpd(t, sa, lcp, &perm)
+    stpd_fast(t, sa, lcp, &perm)
 }
 
 pub fn stpd_lex_minus(t: &T, sa: &SA, lcp: &LCP) -> usize {
@@ -358,7 +480,7 @@ pub fn stpd_lex_minus(t: &T, sa: &SA, lcp: &LCP) -> usize {
     for (i, &x) in sa.iter().enumerate(){
         isa[x] = i;
     }
-    stpd(t, sa, lcp, &isa)
+    stpd_fast(t, sa, lcp, &isa)
 }
 
 pub fn stpd_lex_plus(t: &T, sa: &SA, lcp: &LCP) -> usize {
@@ -366,7 +488,7 @@ pub fn stpd_lex_plus(t: &T, sa: &SA, lcp: &LCP) -> usize {
     for (i, &x) in sa.iter().enumerate(){
         isa[x] = t.len()-1-i;
     }
-    stpd(t, sa, lcp, &isa)
+    stpd_fast(t, sa, lcp, &isa)
 }
 
 pub fn stpd_colex_minus(t: &T, sa: &SA, lcp: &LCP) -> usize {
@@ -375,7 +497,7 @@ pub fn stpd_colex_minus(t: &T, sa: &SA, lcp: &LCP) -> usize {
     for (i, &x) in co_sa.iter().enumerate(){
         i_co_sa[x] = i;
     }
-    stpd(t, sa, lcp, &i_co_sa)
+    stpd_fast(t, sa, lcp, &i_co_sa)
 }
 
 pub fn stpd_colex_plus(t: &T, sa: &SA, lcp: &LCP) -> usize {
@@ -384,14 +506,14 @@ pub fn stpd_colex_plus(t: &T, sa: &SA, lcp: &LCP) -> usize {
     for (i, &x) in co_sa.iter().enumerate(){
         i_co_sa[x] = t.len()-1-i;
     }
-    stpd(t, sa, lcp, &i_co_sa)
+    stpd_fast(t, sa, lcp, &i_co_sa)
 }
 
 
 pub fn stpd_rand(t: &T, sa: &SA, lcp: &LCP) -> usize {
     let mut perm = (0..t.len()).collect_vec();
     perm.shuffle(&mut rng());
-    stpd(t, sa, lcp, &perm)
+    stpd_fast(t, sa, lcp, &perm)
 }
 
 pub fn plcp(t: &T, sa: &SA, lcp: &LCP) -> usize {
