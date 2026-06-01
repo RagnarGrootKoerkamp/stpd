@@ -171,13 +171,31 @@ fn stpd_human() {
     // us:     330s for 100 copies of 10 Mbp =>  3.0 Mbp/s  1 thread
 }
 
+fn pizzachili() -> Vec<(String, T)> {
+    let dir = "/home/philae/git/eth/data/pizzachili/repetitive";
+    let mut entries: Vec<_> = std::fs::read_dir(dir)
+        .expect("failed to read pizzachili dir")
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
+        .collect();
+    entries.sort_by_key(|e| e.file_name());
+    entries
+        .into_iter()
+        .map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let data = std::fs::read(e.path()).expect("failed to read file");
+            (name, data)
+        })
+        .collect()
+}
+
 fn main() {
     env_logger::Builder::from_default_env()
         .format_timestamp_micros()
         .init();
 
     // return stpd_human();
-    return stpd();
+    // return stpd();
 
     // newtest();
 
@@ -189,6 +207,7 @@ fn main() {
     header();
     let repeated = relative(200, 4, 20, 0.05);
     let texts = [
+        pizzachili(),
         // variants(fib(15)),
         vec![
             // random(3_200_000_00, 4),
