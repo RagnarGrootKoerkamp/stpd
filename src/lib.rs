@@ -20,9 +20,15 @@ pub fn print(t: &[u8]) -> String {
 }
 
 pub fn sa(t: &T) -> SA {
-    let mut sa = (0..t.len()).collect_vec();
-    sa.sort_by_key(|&i| &t[i..]);
-    sa
+    libsais::SuffixArrayConstruction::for_text(t.as_slice())
+        .in_owned_buffer32()
+        .multi_threaded(libsais::ThreadCount::openmp_default())
+        .run()
+        .unwrap()
+        .suffix_array()
+        .iter()
+        .map(|&x| x as usize)
+        .collect()
 }
 
 fn co_sa(t: &T) -> Vec<usize> {
@@ -48,16 +54,38 @@ fn co_sa(t: &T) -> Vec<usize> {
     co_sa
 }
 
-pub fn lcp(t: &T, sa: &SA) -> LCP {
+pub fn sa_and_lcp(t: &T) -> (SA, LCP) {
+    let sa_builder = libsais::SuffixArrayConstruction::for_text(t.as_slice())
+        .in_owned_buffer32()
+        .multi_threaded(libsais::ThreadCount::openmp_default())
+        .run()
+        .unwrap();
+    let sa: Vec<usize> = sa_builder.suffix_array()
+        .iter()
+        .map(|&x| x as usize)
+        .collect();
+
     let n = t.len();
-    let lcp = |(i, j)| {
-        let mut l = 0;
-        while i + l < n && j + l < n && t[i + l] == t[j + l] {
-            l += 1;
-        }
-        l
-    };
-    sa.iter().circular_tuple_windows().map(lcp).collect()
+    let lcp_raw = sa_builder.plcp_construction()
+    .multi_threaded(libsais::ThreadCount::openmp_default())
+    .run()
+    .unwrap()
+    .lcp_construction()
+    .multi_threaded(libsais::ThreadCount::openmp_default())
+    .run()
+    .unwrap();
+    let (_, lcp_raw, _, _) = lcp_raw.into_parts();
+    // Drop the sentinel at index 0; the remaining n-1 values correspond to lcp[0..n-1].
+    let mut result: LCP = lcp_raw[1..].iter().map(|&x| x as usize).collect();
+    // Append the circular wrap: LCP(sa[n-1], sa[0]).
+    let (a, b) = (sa[n - 1], sa[0]);
+    let mut l = 0;
+    while a + l < n && b + l < n && t[a + l] == t[b + l] {
+        l += 1;
+    }
+    result.push(l);
+
+    (sa, result)
 }
 
 pub fn bwt(t: &T, sa: &SA) -> T {

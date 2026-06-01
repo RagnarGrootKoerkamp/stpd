@@ -40,12 +40,12 @@ fn header() {
 }
 
 fn stats((name, t): &(String, T), print: bool) {
+    eprintln!("{name}: {}", t.len());
     if print {
         eprintln!("T: {}", crate::print(t));
     }
     let n = t.len();
-    let sa = &sa(t);
-    let lcp = &lcp(t, sa);
+    let (sa, lcp) = &sa_and_lcp(t);
 
     // let mut nodes = 0;
     // let mut node_depth = 0;
