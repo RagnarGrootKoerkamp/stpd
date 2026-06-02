@@ -1,15 +1,15 @@
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
-pub trait Rmq<'a> {
+pub trait Rmq {
     fn name() -> String;
     /// To save time, only run benchmarks up to this n.
     fn max_n() -> usize {
         usize::MAX
     }
-    fn build(data: &'a [u64]) -> Self;
+    fn build(data: &[u64]) -> Self;
     /// Space usage in bytes.
     fn space(&self) -> usize;
-    fn query(&self, l: usize, r: usize) -> (u64, usize);
+    fn query(&self, data: &[u64], l: usize, r: usize) -> (u64, usize);
 }
 
 // -------------------------------------------------------------
@@ -21,16 +21,15 @@ pub trait Rmq<'a> {
 /// For query [l, r]:
 /// - Same block: linear scan.
 /// - Across blocks: suffix scan of first block, sparse table on interior blocks, prefix scan of last block.
-pub struct BlockRmq<'a, const S: usize> {
-    data: &'a [u64],
+pub struct BlockRmq<const S: usize> {
     block_min_pos: Vec<usize>,
     sparse: SparseTable,
 }
-impl<'a, const S: usize> Rmq<'a> for BlockRmq<'a, S> {
+impl<const S: usize> Rmq for BlockRmq<S> {
     fn name() -> String {
         format!("BlockRmq<{S}>")
     }
-    fn build(data: &'a [u64]) -> Self {
+    fn build(data: &[u64]) -> Self {
         let n = data.len();
         let (block_mins, block_min_pos): (Vec<u64>, Vec<usize>) = (0..(n + S - 1) / S)
             .into_par_iter()
@@ -42,7 +41,6 @@ impl<'a, const S: usize> Rmq<'a> for BlockRmq<'a, S> {
             })
             .unzip();
         BlockRmq {
-            data,
             block_min_pos,
             sparse: SparseTable::build(&block_mins),
         }
@@ -50,22 +48,16 @@ impl<'a, const S: usize> Rmq<'a> for BlockRmq<'a, S> {
     fn space(&self) -> usize {
         self.sparse.space()
     }
-    fn query(&self, l: usize, r: usize) -> (u64, usize) {
+    fn query(&self, data: &[u64], l: usize, r: usize) -> (u64, usize) {
         let block_l = l / S;
         let block_r = r / S;
         if block_l == block_r {
-            return (l..r + 1).map(|i| (self.data[i], i)).min().unwrap();
+            return (l..r + 1).map(|i| (data[i], i)).min().unwrap();
         }
-        let suffix = (l..(block_l + 1) * S)
-            .map(|i| (self.data[i], i))
-            .min()
-            .unwrap();
-        let prefix = (block_r * S..r + 1)
-            .map(|i| (self.data[i], i))
-            .min()
-            .unwrap();
+        let suffix = (l..(block_l + 1) * S).map(|i| (data[i], i)).min().unwrap();
+        let prefix = (block_r * S..r + 1).map(|i| (data[i], i)).min().unwrap();
         let mid = if block_r > block_l + 1 {
-            let (val, block_idx) = self.sparse.query(block_l + 1, block_r - 1);
+            let (val, block_idx) = self.sparse.query(data, block_l + 1, block_r - 1);
             let idx = self.block_min_pos[block_idx];
             (val, idx)
         } else {
@@ -80,18 +72,17 @@ impl<'a, const S: usize> Rmq<'a> for BlockRmq<'a, S> {
 ///
 /// `prefix_min[i]` = min(data[block_start ..= i])
 /// `suffix_min[i]` = min(data[i ..= block_end])
-pub struct BlockRmqPrecomputed<'a, const S: usize> {
-    data: &'a [u64],
+pub struct BlockRmqPrecomputed<const S: usize> {
     prefix_min: Vec<(u64, usize)>,
     suffix_min: Vec<(u64, usize)>,
     block_min_pos: Vec<usize>,
     sparse: SparseTable,
 }
-impl<'a, const S: usize> Rmq<'a> for BlockRmqPrecomputed<'a, S> {
+impl<const S: usize> Rmq for BlockRmqPrecomputed<S> {
     fn name() -> String {
         format!("BlockPSRmq<{S}>")
     }
-    fn build(data: &'a [u64]) -> Self {
+    fn build(data: &[u64]) -> Self {
         let n = data.len();
         let num_blocks = (n + S - 1) / S;
         let mut prefix_min = vec![(0u64, 0); n];
@@ -118,7 +109,6 @@ impl<'a, const S: usize> Rmq<'a> for BlockRmqPrecomputed<'a, S> {
             .unzip();
 
         BlockRmqPrecomputed {
-            data,
             prefix_min,
             suffix_min,
             block_min_pos,
@@ -130,16 +120,16 @@ impl<'a, const S: usize> Rmq<'a> for BlockRmqPrecomputed<'a, S> {
             + std::mem::size_of_val(self.suffix_min.as_slice())
             + self.sparse.space()
     }
-    fn query(&self, l: usize, r: usize) -> (u64, usize) {
+    fn query(&self, data: &[u64], l: usize, r: usize) -> (u64, usize) {
         let block_l = l / S;
         let block_r = r / S;
         if block_l == block_r {
-            return (l..=r).map(|i| (self.data[i], i)).min().unwrap();
+            return (l..=r).map(|i| (data[i], i)).min().unwrap();
         }
         let suffix = self.suffix_min[l];
         let prefix = self.prefix_min[r];
         let mid = if block_r > block_l + 1 {
-            let (val, block_idx) = self.sparse.query(block_l + 1, block_r - 1);
+            let (val, block_idx) = self.sparse.query(data, block_l + 1, block_r - 1);
             let idx = self.block_min_pos[block_idx];
             (val, idx)
         } else {
@@ -156,11 +146,11 @@ impl<'a, const S: usize> Rmq<'a> for BlockRmqPrecomputed<'a, S> {
 struct SparseTable {
     table: Vec<Vec<(u64, usize)>>,
 }
-impl<'a> Rmq<'a> for SparseTable {
+impl Rmq for SparseTable {
     fn name() -> String {
         "SparseTable".to_string()
     }
-    fn build(data: &'a [u64]) -> Self {
+    fn build(data: &[u64]) -> Self {
         let n = data.len();
         let levels = if n <= 1 {
             1
@@ -187,7 +177,7 @@ impl<'a> Rmq<'a> for SparseTable {
             .map(|row| std::mem::size_of_val(row.as_slice()))
             .sum::<usize>()
     }
-    fn query(&self, l: usize, r: usize) -> (u64, usize) {
+    fn query(&self, _data: &[u64], l: usize, r: usize) -> (u64, usize) {
         let k = usize::BITS as usize - (r - l + 1).leading_zeros() as usize - 1;
         self.table[k][l].min(self.table[k][r - (1 << k) + 1])
     }

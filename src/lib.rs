@@ -16,7 +16,7 @@ pub type SA = Vec<usize>;
 pub type LCP = Vec<usize>;
 
 pub fn print(t: &[u8]) -> String {
-    if t[0] <= 4 {
+    if !t.is_empty() &&  t[0] <= 4 {
         String::from_utf8(t.iter().map(|c| b'0' + c).collect_vec()).unwrap()
     } else {
         String::from_utf8(t.to_vec()).unwrap()
@@ -386,8 +386,7 @@ pub fn stpd(t: &T, _sa: &SA, _lcp: &LCP, perm: &Vec<usize>) -> usize {
 }
 
 pub fn stpd_fast(t: &T, sa: &SA, bwt: &T, lcp: &LCP, pi: &Vec<usize>) -> usize {
-    let jump_index = jump_index::JumpIndex::new(t, sa, bwt, lcp, pi);
-
+    let jump_index = jump_index::JumpIndex::new2(t, sa, bwt, lcp, pi);
 
     let JumpIndexStats { num_sampled, num_sources, num_source_chars, num_links } = jump_index.stats();
 

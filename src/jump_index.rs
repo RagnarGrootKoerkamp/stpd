@@ -1,9 +1,19 @@
 use itertools::Itertools;
-use std::{collections::BTreeSet, marker::Sync};
+use std::{
+    cmp::Ordering::{self, Greater, Less},
+    collections::BTreeSet,
+    marker::Sync,
+};
 
-use crate::{rmq, stpd::cmp_colex, LCP, SA, T};
+use crate::{
+    bwt, print,
+    rmq::{self, Rmq},
+    sa_and_lcp,
+    stpd::cmp_colex,
+    LCP, SA, T,
+};
 
-#[derive(Copy, Clone, PartialEq, PartialOrd, Eq, Ord)]
+#[derive(Copy, Clone, PartialEq, PartialOrd, Eq, Ord, Debug)]
 pub struct Link {
     pub source: usize,
     pub c: u8,
@@ -29,6 +39,8 @@ pub struct JumpIndex<TR: AsRef<T>, SAR: AsRef<SA>, LCPR: AsRef<LCP>> {
     pub sa: SAR,
     pub lcp: LCPR,
     pub stpd_samples: Vec<usize>,
+    pub stpd_pi: Vec<u64>,
+    pub stpd_rmq: rmq::BlockRmq<64>,
     // TODO: Predecessor structure
     pub links: Vec<Link>,
 }
@@ -40,22 +52,30 @@ pub struct JumpIndexStats {
     pub num_links: usize,
 }
 
+impl<TR: AsRef<T> + Sync> JumpIndex<TR, Vec<usize>, Vec<usize>> {
+    pub fn new(t: TR) -> Self {
+        let (sa, lcp) = sa_and_lcp(t.as_ref());
+        let bwt = &bwt(t.as_ref(), &sa);
+        let pi = (0..t.as_ref().len()).collect_vec();
+        Self::new2(t, sa, bwt, lcp, &pi)
+    }
+}
 impl<TR: AsRef<T> + Sync, SAR: AsRef<SA> + Sync, LCPR: AsRef<LCP> + Sync> JumpIndex<TR, SAR, LCPR> {
-    pub fn new(t: TR, sa: SAR, bwt: &T, lcp: LCPR, pi: &Vec<usize>) -> Self {
+    pub fn new2(t: TR, sa: SAR, bwt: &T, lcp: LCPR, pi: &Vec<usize>) -> Self {
         const PARALLEL_THRESHOLD: usize = 100_000;
 
-        struct State<'a, T, SA, LCP> {
+        struct State<'a, T, SA> {
             t: T,
             sa: SA,
-            lcp: LCP,
+            lcp: Vec<u64>,
             run_boundaries: BTreeSet<usize>,
-            lcp_rmq: rmq::BlockRmq<'a, 128>,
+            lcp_rmq: rmq::BlockRmq<128>,
             #[allow(unused)]
-            permuted_pi: &'a Vec<usize>,
-            pi_rmq: rmq::BlockRmq<'a, 128>,
+            permuted_pi: &'a Vec<u64>,
+            pi_rmq: rmq::BlockRmq<128>,
         }
 
-        impl<'a, TR: AsRef<T>, SAR: AsRef<SA>, LCPR: AsRef<LCP>> State<'a, TR, SAR, LCPR> {
+        impl<'a, TR: AsRef<T>, SAR: AsRef<SA>> State<'a, TR, SAR> {
             fn split(
                 &self,
                 interval: std::ops::Range<usize>,
@@ -63,21 +83,32 @@ impl<TR: AsRef<T> + Sync, SAR: AsRef<SA> + Sync, LCPR: AsRef<LCP> + Sync> JumpIn
                 if interval.len() <= 1 {
                     return None;
                 }
-                if self.run_boundaries.range(interval.clone()).next().is_none() {
-                    return None;
-                }
+                // FIXME
+                // if self.run_boundaries.range(interval.clone()).next().is_none() {
+                //     return None;
+                // }
 
-                let anchor_pos = self.pi_rmq.query(interval.start, interval.end - 1).1;
+                let anchor_pos = self
+                    .pi_rmq
+                    .query(&self.permuted_pi, interval.start, interval.end - 1)
+                    .1;
                 let mut done_intervals = vec![];
                 let mut wip_intervals = vec![interval.clone()];
-                let lcp = self.lcp.as_ref()[self.lcp_rmq.query(interval.start, interval.end - 2).1];
+                let lcp = self.lcp[self
+                    .lcp_rmq
+                    .query(&self.lcp, interval.start, interval.end - 2)
+                    .1];
                 while let Some(interval) = wip_intervals.pop() {
                     if interval.len() <= 1 {
                         done_intervals.push(interval);
                         continue;
                     }
-                    let split_pos = self.lcp_rmq.query(interval.start, interval.end - 2).1 + 1;
-                    let new_lcp = self.lcp.as_ref()[split_pos - 1];
+                    let split_pos = self
+                        .lcp_rmq
+                        .query(&self.lcp, interval.start, interval.end - 2)
+                        .1
+                        + 1;
+                    let new_lcp = self.lcp[split_pos - 1];
                     if new_lcp > lcp {
                         done_intervals.push(interval);
                         continue;
@@ -86,7 +117,7 @@ impl<TR: AsRef<T> + Sync, SAR: AsRef<SA> + Sync, LCPR: AsRef<LCP> + Sync> JumpIn
                     wip_intervals.push(interval.start..split_pos);
                     wip_intervals.push(split_pos..interval.end);
                 }
-                Some((anchor_pos, lcp, done_intervals))
+                Some((anchor_pos, lcp as usize, done_intervals))
             }
 
             fn node_output(
@@ -99,7 +130,8 @@ impl<TR: AsRef<T> + Sync, SAR: AsRef<SA> + Sync, LCPR: AsRef<LCP> + Sync> JumpIn
             ) {
                 for x in done_intervals {
                     if !x.contains(&anchor_pos) {
-                        let secondary_anchor_pos = self.pi_rmq.query(x.start, x.end - 1).1;
+                        let secondary_anchor_pos =
+                            self.pi_rmq.query(&self.permuted_pi, x.start, x.end - 1).1;
                         let text_idx = self.sa.as_ref()[secondary_anchor_pos];
                         let target = text_idx + lcp;
                         if target < self.t.as_ref().len() {
@@ -164,14 +196,14 @@ impl<TR: AsRef<T> + Sync, SAR: AsRef<SA> + Sync, LCPR: AsRef<LCP> + Sync> JumpIn
 
         use rmq::Rmq as _;
         let lcp_u64: Vec<u64> = lcp.as_ref().iter().map(|&x| x as u64).collect();
-        let ppi_u64: Vec<u64> = permuted_pi.iter().map(|&x| x as u64).collect();
+        let permuted_pi: Vec<u64> = permuted_pi.iter().map(|&x| x as u64).collect();
         let state = State {
             t,
             sa,
-            lcp,
             run_boundaries,
             lcp_rmq: rmq::BlockRmq::build(&lcp_u64),
-            pi_rmq: rmq::BlockRmq::build(&ppi_u64),
+            lcp: lcp_u64,
+            pi_rmq: rmq::BlockRmq::build(&permuted_pi),
             permuted_pi: &permuted_pi,
         };
 
@@ -200,18 +232,32 @@ impl<TR: AsRef<T> + Sync, SAR: AsRef<SA> + Sync, LCPR: AsRef<LCP> + Sync> JumpIn
             links.extend(l);
         }
 
-        let State { t, sa, lcp, .. } = state;
+        let State { t, sa, .. } = state;
 
         use voracious_radix_sort::RadixSort;
+        stpd_samples.voracious_mt_sort(12);
         links.voracious_mt_sort(12);
 
-        stpd_samples.sort_by(|&a, &b| cmp_colex(&t.as_ref()[..a], &t.as_ref()[..b]).1);
+        stpd_samples.dedup();
+        links.dedup();
+
+        stpd_samples.sort_by(|&a, &b| cmp_colex(&t.as_ref()[..=a], &t.as_ref()[..=b]).1);
+        let stpd_pi: Vec<u64> = stpd_samples.iter().map(|&x| pi[x] as u64).collect();
+        stpd_samples.iter().take(10).for_each(|&i| {
+            eprintln!(
+                "{i:>3}: {} ({})",
+                print(&t.as_ref()[i.saturating_sub(30)..=i]),
+                pi[i]
+            );
+        });
 
         JumpIndex {
             t,
             sa,
             lcp,
             stpd_samples,
+            stpd_rmq: rmq::BlockRmq::build(&stpd_pi),
+            stpd_pi,
             links,
         }
     }
@@ -255,13 +301,35 @@ impl<TR: AsRef<T> + Sync, SAR: AsRef<SA> + Sync, LCPR: AsRef<LCP> + Sync> JumpIn
             }
 
             // TODO: Use binary search function that reuses LCP.
-            pos = self
+            let idx1 = self
                 .stpd_samples
                 .binary_search_by(|&sample_pos| {
-                    cmp_colex(&self.t.as_ref()[..sample_pos], &pattern[..=i]).1
+                    match cmp_colex(&self.t.as_ref()[..=sample_pos], &pattern[..=i]).1 {
+                        std::cmp::Ordering::Equal => Greater,
+                        x => x,
+                    }
                 })
-                .ok()?;
+                .unwrap_err();
+            let idx2 = self
+                .stpd_samples
+                .binary_search_by(|&sample_pos| {
+                    match cmp_colex(&self.t.as_ref()[..=sample_pos], &pattern[..=i]).1 {
+                        std::cmp::Ordering::Equal => Less,
+                        x => x,
+                    }
+                })
+                .unwrap_err();
+            if idx1 == idx2 {
+                // eprintln!("idx: {idx1}..{idx2}");
+                return None;
+            }
+            let (_val, idx) = self.stpd_rmq.query(&self.stpd_pi, idx1, idx2 - 1);
+            // eprintln!("idx: {idx1}..{idx2} => {idx} val={_val}");
+            pos = self.stpd_samples[idx] + 1;
+
+            // eprintln!("pos: {pos}");
         }
+        // eprintln!("end pos {pos}");
         Some(pos - pattern.len())
     }
 
@@ -287,8 +355,9 @@ impl<TR: AsRef<T> + Sync, SAR: AsRef<SA> + Sync, LCPR: AsRef<LCP> + Sync> JumpIn
                         .key(),
                     )
                 })
-                .ok()?;
+                .map_or_else(|e| e, |v| v);
             let link = self.links[link_idx];
+            // eprintln!("pos {pos} link {link:?}");
             if link.source == pos && link.c == c {
                 pos = link.target + 1;
             } else {
@@ -307,4 +376,61 @@ fn co_lcp(a: &[u8], b: &[u8]) -> usize {
         }
     }
     min
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::strings::relative;
+
+    #[test]
+    fn test() {
+        let mut t1 = std::time::Duration::default();
+        let mut t2 = std::time::Duration::default();
+        for (len, repeats, r) in [
+            (10, 1, 0.1),
+            (10, 2, 0.1),
+            (10, 3, 0.1),
+            (10, 4, 0.1),
+            (10, 10, 0.1),
+            (100, 1, 0.1),
+            (100, 10, 0.1),
+            (100, 100, 0.05),
+            (100, 1000, 0.05),
+            (1000, 100, 0.05),
+            (10000, 10, 0.05),
+        ] {
+            let t = relative(len, 4, repeats, r).1;
+            eprintln!("text: {}", print(&t));
+
+            eprintln!("building for {len}x{repeats} at {r}..");
+            let ji = JumpIndex::new(&t);
+
+            // find a bunch of random substrings
+            eprintln!("querying..");
+            for len in 0..=len.min(1000) {
+                let pos = rand::random_range(0..=t.len() - len);
+                let pattern = &t[pos..pos + len];
+
+                eprintln!("pattern: {}", print(pattern));
+
+                let s = std::time::Instant::now();
+                let p1 = ji.map_stpd(pattern);
+                t1 += s.elapsed();
+                let s = std::time::Instant::now();
+                let p2 = ji.map_jump(pattern);
+                t2 += s.elapsed();
+                eprintln!("p1: {p1:?}");
+                eprintln!("p2: {p2:?}");
+                let p1 = p1.unwrap();
+                let p2 = p2.unwrap();
+
+                assert_eq!(&t[p1..p1 + len], pattern);
+                assert_eq!(&t[p2..p2 + len], pattern);
+                assert_eq!(p1, p2);
+            }
+        }
+        eprintln!("STPD: {t1:?}");
+        eprintln!("JI:   {t2:?}");
+    }
 }
