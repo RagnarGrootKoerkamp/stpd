@@ -815,7 +815,7 @@ fn read_last_u64(text: &[u8], i: usize, len: usize) -> u64 {
 
 /// co-lex compare q with a text prefix.
 /// Returns `Equal` when `q` is a suffix of `text`.
-fn cmp_colex(text: &[u8], q: &[u8]) -> (usize, Ordering) {
+pub fn cmp_colex(text: &[u8], q: &[u8]) -> (usize, Ordering) {
     let min_len = Ord::min(text.len(), q.len());
     let min = min_len / 8 * 8;
     for i in (0..min).step_by(8) {
