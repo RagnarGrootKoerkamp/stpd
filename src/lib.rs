@@ -85,7 +85,7 @@ pub fn bwt(t: &T, sa: &SA) -> T {
 pub fn r(bwt: &T) -> usize {
     1 + bwt
         .iter()
-        .circular_tuple_windows()
+        .tuple_windows()
         .map(|(l, r)| if l != r { 1 } else { 0 })
         .sum::<usize>()
 }
