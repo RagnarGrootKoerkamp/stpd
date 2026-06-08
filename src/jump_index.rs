@@ -83,10 +83,14 @@ impl<TR: AsRef<T> + Sync, SAR: AsRef<SA> + Sync, LCPR: AsRef<LCP> + Sync> JumpIn
                 if interval.len() <= 1 {
                     return None;
                 }
-                // FIXME
-                // if self.run_boundaries.range(interval.clone()).next().is_none() {
-                //     return None;
-                // }
+                let single_run = self
+                    .run_boundaries
+                    .range(interval.start..interval.end - 1)
+                    .next()
+                    .is_none();
+                if single_run {
+                    return None;
+                }
 
                 let anchor_pos = self
                     .pi_rmq
@@ -185,7 +189,8 @@ impl<TR: AsRef<T> + Sync, SAR: AsRef<SA> + Sync, LCPR: AsRef<LCP> + Sync> JumpIn
             }
         }
 
-        let run_boundaries = (0..t.as_ref().len() - 1)
+        let max_idx = t.as_ref().len() - 1;
+        let run_boundaries = (0..t.as_ref().len())
             .tuple_windows()
             .filter(|(i, j)| bwt[*i] != bwt[*j])
             .map(|(i, _j)| i)
