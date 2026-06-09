@@ -1,3 +1,4 @@
+#![allow(unused)]
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 pub trait Rmq {

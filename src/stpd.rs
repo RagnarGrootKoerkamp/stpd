@@ -100,7 +100,7 @@ impl Stpd {
         let mut seen_before = self.seen_before.clone();
         let mut anchor_idx = self.anchor_idx;
         // No need to create an anchor for the first character.
-        let mut extends = 0;
+        let mut _extends = 0;
         for pos in old_len.max(1)..text.len() {
             // Append text[pos].
             let c = text[pos];
@@ -118,11 +118,11 @@ impl Stpd {
             if text[seen_before.end] == c {
                 log::debug!("Found by extending current match.");
                 seen_before.end += 1;
-                extends += 1;
+                _extends += 1;
                 continue;
             }
-            // log::warn!("Extended {extends}\n");
-            extends = 0;
+            // log::warn!("Extended {_extends}\n");
+            _extends = 0;
             log::info!(
                 "Pos {pos} Push {}. Seen before: {}=|{seen_before:?}| with anchor {}",
                 c as char,

@@ -1,12 +1,12 @@
 use itertools::Itertools;
 use std::{
-    cmp::Ordering::{self, Greater, Less},
+    cmp::Ordering::{Greater, Less},
     collections::BTreeSet,
     marker::Sync,
 };
 
 use crate::{
-    bwt, print,
+    bwt,
     rmq::{self, Rmq},
     sa_and_lcp,
     stpd::cmp_colex,
@@ -104,7 +104,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                     .pi_rmq
                     .query(&self.permuted_pi, interval.start, interval.end - 1)
                     .1;
-                let anchor_pos = self.sa.as_ref()[anchor_idx];
+                // let _anchor_pos = self.sa.as_ref()[anchor_idx];
                 // eprintln!("anchor pos: {anchor_pos}");
                 let mut done_intervals = vec![];
                 let mut wip_intervals = vec![interval.clone()];
@@ -290,7 +290,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
             cdawg_edges += ce;
         }
 
-        let State { t, sa, .. } = state;
+        let State { t, sa: _sa, .. } = state;
 
         use voracious_radix_sort::RadixSort;
         stpd_samples.voracious_mt_sort(12);
@@ -491,6 +491,7 @@ fn co_lcp(a: &[u8], b: &[u8]) -> usize {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::print;
     use crate::strings::relative;
 
     #[test]

@@ -1,5 +1,5 @@
 #![feature(gen_blocks, bstr, vec_from_fn, vec_try_remove)]
-use std::{cmp::{Ordering, Reverse}, collections::{BTreeSet, HashMap, HashSet, hash_map::Entry}};
+use std::{cmp::{Reverse}, collections::{HashMap, HashSet}};
 use itertools::Itertools;
 use jump_index::JumpIndexStats;
 use rand::{rng, seq::SliceRandom};
@@ -421,6 +421,7 @@ pub fn stpd_fast(t: &T, sa: &SA, bwt: &T, lcp: &LCP, pi: &Vec<usize>) -> usize {
 
     let JumpIndexStats { num_sampled, num_sources, num_source_chars, num_links, cdawg_nodes, cdawg_edges } = jump_index.stats();
 
+    #[allow(unused)]
     let c = 1000000.;
     let c = 1.;
     eprint!(" {:>5.2}  | ", num_sampled as f32 / c);
