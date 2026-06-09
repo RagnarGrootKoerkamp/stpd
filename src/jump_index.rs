@@ -151,11 +151,11 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                     if !x.contains(&anchor_pos) {
                         let secondary_anchor_pos =
                             self.pi_rmq.query(&self.permuted_pi, x.start, x.end - 1).1;
-                        let text_idx = self.sa.as_ref()[secondary_anchor_pos];
-                        let target = text_idx + lcp;
+                        let text_idx = self.sa.as_ref()[secondary_anchor_pos] as usize;
+                        let target = text_idx + lcp as usize;
                         if target < self.t.as_ref().len() {
                             sampled.push(target);
-                            let source = self.sa.as_ref()[anchor_pos] + lcp;
+                            let source = self.sa.as_ref()[anchor_pos] as usize + lcp as usize;
                             let c = self.t.as_ref()[target];
                             links.push(Link {
                                 source,
@@ -231,7 +231,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
             .collect_vec();
         let run_boundaries = BTreeSet::from_iter(run_boundaries);
 
-        let permuted_pi: Vec<usize> = sa.as_ref().par_iter().map(|&i| pi[i]).collect();
+        let permuted_pi: Vec<usize> = sa.as_ref().par_iter().map(|&i| pi[i as usize]).collect();
         // eprintln!();
         // eprintln!("sa:  {:?}", sa.as_ref());
         // eprintln!("lcp: {:?}", lcp.as_ref());

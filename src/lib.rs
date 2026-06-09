@@ -3,7 +3,7 @@ use std::{cmp::{Ordering, Reverse}, collections::{BTreeSet, HashMap, HashSet, ha
 use itertools::Itertools;
 use jump_index::JumpIndexStats;
 use rand::{rng, seq::SliceRandom};
-use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 
 pub mod strings;
 pub mod test;
@@ -12,8 +12,10 @@ pub mod jump_index;
 mod rmq;
 
 pub type T = Vec<u8>;
-pub type SA = Vec<usize>;
-pub type LCP = Vec<usize>;
+pub type SaElem = u32;
+pub type SA = Vec<u32>;
+pub type LcpElem = u32;
+pub type LCP = Vec<u32>;
 
 pub fn print(t: &[u8]) -> String {
     if !t.is_empty() &&  t[0] <= 4 {
@@ -23,61 +25,88 @@ pub fn print(t: &[u8]) -> String {
     }
 }
 
+/// Shrink a Vec<i64> to a smaller type by iterating in reverse,
+/// progressively freeing memory every million elements.
+fn shrink_vec<T: Copy + Default>(mut source: Vec<i64>, convert: impl Fn(i64) -> T) -> Vec<T> {
+    let len = source.len();
+    let mut result = vec![T::default(); len];
+    let shrink_interval = 1<<25;
+    
+    for i in (0..len).rev() {
+        result[i] = convert(source[i]);
+        if i % shrink_interval == 0 {
+            source.truncate(i);
+            source.shrink_to_fit();
+        }
+    }
+    result
+}
+
 pub fn sa(t: &T) -> SA {
     libsais::SuffixArrayConstruction::for_text(t.as_slice())
         .in_owned_buffer64()
         .multi_threaded(libsais::ThreadCount::openmp_default())
         .run()
         .unwrap()
-        .suffix_array()
-        .iter()
-        .map(|&x| x as usize)
+        .into_parts().0
+        .into_iter()
+        .map(|x| x as u32)
         .collect()
 }
 
-fn co_sa(t: &T) -> Vec<usize> {
+fn co_sa(t: &T) -> SA {
     let tr = t.iter().rev().copied().collect_vec();
     let co_sa = sa(&tr);
-    co_sa.into_iter().map(|x| t.len() - 1 - x).collect_vec()
+    co_sa.into_iter().map(|x| t.len() as SaElem - 1 - x ).collect_vec()
 }
 
 pub fn sa_and_lcp(t: &T) -> (SA, LCP) {
+    eprintln!("building sa..");
     let sa_builder = libsais::SuffixArrayConstruction::for_text(t.as_slice())
         .in_owned_buffer64()
         .multi_threaded(libsais::ThreadCount::openmp_default())
         .run()
         .unwrap();
-    let sa: Vec<usize> = sa_builder.suffix_array()
-        .iter()
-        .map(|&x| x as usize)
-        .collect();
+    eprintln!("SA:   {} GB", std::mem::size_of_val(sa_builder.suffix_array()) as f32 / 1e9);
 
     let n = t.len();
-    let lcp_raw = sa_builder.plcp_construction()
-    .multi_threaded(libsais::ThreadCount::openmp_default())
-    .run()
-    .unwrap()
-    .lcp_construction()
+    eprintln!("building plcp..");
+    let plcp_builder = sa_builder.plcp_construction()
     .multi_threaded(libsais::ThreadCount::openmp_default())
     .run()
     .unwrap();
-    let (_, lcp_raw, _, _) = lcp_raw.into_parts();
+    eprintln!("PLCP: {} GB", std::mem::size_of_val(plcp_builder.plcp()) as f32 / 1e9);
+
+    let (sa, plcp, _) = plcp_builder.into_parts();
+
+    // Shrink types by progressively freeing allocations.
+    eprintln!("shrinking..");
+    let sa = shrink_vec(sa, |x| TryInto::<SaElem>::try_into(x).unwrap());
+    eprintln!("SA:   {} GB", std::mem::size_of_val(sa.as_slice()) as f32 / 1e9);
+    let plcp = shrink_vec(plcp, |x|  TryInto::<LcpElem>::try_into(x).unwrap());
+    eprintln!("PLCP: {} GB", std::mem::size_of_val(plcp.as_slice()) as f32 / 1e9);
+
+    // Manually convert PLCP to LCP after shrinking allocations.
+    let mut lcp: LCP = (0..n).into_par_iter().map(|i| plcp[sa[i] as usize]).collect();
+
+    eprintln!("LCP:  {} GB", std::mem::size_of_val(lcp.as_slice()) as f32 / 1e9);
+
     // Drop the sentinel at index 0; the remaining n-1 values correspond to lcp[0..n-1].
-    let mut result: LCP = lcp_raw[1..].iter().map(|&x| x as usize).collect();
+    lcp.remove(0);
     // Append the circular wrap: LCP(sa[n-1], sa[0]).
-    let (a, b) = (sa[n - 1], sa[0]);
+    let (a, b) = (sa[n - 1] as usize, sa[0] as usize);
     let mut l = 0;
     while a + l < n && b + l < n && t[a + l] == t[b + l] {
         l += 1;
     }
-    result.push(l);
+    lcp.push(l as LcpElem);
 
-    (sa, result)
+    (sa, lcp)
 }
 
 pub fn bwt(t: &T, sa: &SA) -> T {
     sa.par_iter()
-        .map(|&i| t[if i == 0 { t.len() - 1 } else { i - 1 }])
+        .map(|&i| t[if i == 0 { t.len() - 1 } else { i as usize - 1 }])
         .collect()
 }
 
@@ -114,7 +143,7 @@ pub fn tree_nodes<'t>(t: &'t T, sa: &SA, lcp: &LCP) -> impl Iterator<Item = &'t 
             let l = lcp[i];
             while *depths.last().unwrap() > l {
                 let l2 = depths.pop().unwrap();
-                yield &t[sa[i]..sa[i]+l2];
+                yield &t[sa[i] as usize..sa[i] as usize+l2 as usize];
             }
             if *depths.last().unwrap() < l {
                 depths.push(l);
@@ -133,11 +162,13 @@ pub fn tree_edges<'t>(t: &'t T, sa: &SA, lcp: &LCP) -> impl Iterator<Item = &'t 
             // eprintln!("{i} {l} {} {:?}", sa[i], &t[sa[i]..]);
             while let Some(l2) = depths.last() && *l2 > l {
                 let l2 = depths.pop().unwrap();
-                yield &t[sa[i]..sa[i]+l2+1];
+                let idx = sa[i] as usize;
+                yield &t[idx..idx+l2 as usize+1];
             }
             // Otherwise the suffix is just an internal node anyway.
-            if sa[i] + l + 1 <=  t.len(){
-                yield &t[sa[i]..sa[i]+l+1];
+            if sa[i] as usize + l as usize + 1 <=  t.len(){
+                let idx = sa[i] as usize;
+                yield &t[idx..idx+l as usize+1];
             }
             depths.push(l);
         }
@@ -416,7 +447,7 @@ pub fn stpd_pos_plus(t: &T, sa: &SA,  bwt: &T,lcp: &LCP) -> usize {
 pub fn stpd_lex_minus(t: &T, sa: &SA,  bwt: &T,lcp: &LCP) -> usize {
     let mut isa = vec![0; t.len()];
     for (i, &x) in sa.iter().enumerate(){
-        isa[x] = i;
+        isa[x as usize] = i;
     }
     stpd_fast(t, sa, bwt, lcp, &isa)
 }
@@ -424,7 +455,7 @@ pub fn stpd_lex_minus(t: &T, sa: &SA,  bwt: &T,lcp: &LCP) -> usize {
 pub fn stpd_lex_plus(t: &T, sa: &SA,  bwt: &T,lcp: &LCP) -> usize {
     let mut isa = vec![0; t.len()];
     for (i, &x) in sa.iter().enumerate(){
-        isa[x] = t.len()-1-i;
+        isa[x as usize] = t.len()-1-i;
     }
     stpd_fast(t, sa, bwt, lcp, &isa)
 }
@@ -433,7 +464,7 @@ pub fn stpd_colex_minus(t: &T, sa: &SA,  bwt: &T,lcp: &LCP) -> usize {
     let co_sa = co_sa(t);
     let mut i_co_sa = vec![0; t.len()];
     for (i, &x) in co_sa.iter().enumerate(){
-        i_co_sa[x] = i;
+        i_co_sa[x as usize] = i;
     }
     stpd_fast(t, sa, bwt, lcp, &i_co_sa)
 }
@@ -442,7 +473,7 @@ pub fn stpd_colex_plus(t: &T, sa: &SA,  bwt: &T,lcp: &LCP) -> usize {
     let co_sa = co_sa(t);
     let mut i_co_sa = vec![0; t.len()];
     for (i, &x) in co_sa.iter().enumerate(){
-        i_co_sa[x] = t.len()-1-i;
+        i_co_sa[x as usize] = t.len()-1-i;
     }
     stpd_fast(t, sa, bwt, lcp, &i_co_sa)
 }
@@ -457,7 +488,7 @@ pub fn stpd_rand(t: &T, sa: &SA, bwt: &T, lcp: &LCP) -> usize {
 pub fn plcp(t: &T, sa: &SA, lcp: &LCP) -> usize {
     let mut plcp = vec![0; t.len()];
     for i in 0..t.len(){
-        plcp[sa[i]] = lcp[i];
+        plcp[sa[i] as usize] = lcp[i];
     }
     let mut r = 1;
     for (&x, &y) in plcp.iter().tuple_windows() {
