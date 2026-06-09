@@ -1,4 +1,4 @@
-#![feature(gen_blocks, bstr, vec_from_fn)]
+#![feature(gen_blocks, bstr, vec_from_fn, vec_try_remove)]
 use std::{cmp::{Ordering, Reverse}, collections::{BTreeSet, HashMap, HashSet, hash_map::Entry}};
 use itertools::Itertools;
 use jump_index::JumpIndexStats;
@@ -388,14 +388,18 @@ pub fn stpd(t: &T, _sa: &SA, _lcp: &LCP, perm: &Vec<usize>) -> usize {
 pub fn stpd_fast(t: &T, sa: &SA, bwt: &T, lcp: &LCP, pi: &Vec<usize>) -> usize {
     let jump_index = jump_index::JumpIndex::new2(t, sa, bwt, lcp, pi);
 
-    let JumpIndexStats { num_sampled, num_sources, num_source_chars, num_links } = jump_index.stats();
+    let JumpIndexStats { num_sampled, num_sources, num_source_chars, num_links, cdawg_nodes, cdawg_edges } = jump_index.stats();
 
-    // let c = 1000000.;
+    let c = 1000000.;
     let c = 1.;
     eprint!(" {:>5.2}  | ", num_sampled as f32 / c);
     eprint!(" {:>5.2}  | ", num_sources as f32 / c);
     eprint!(" {:>5.2}  | ", num_source_chars as f32 / c);
-    eprintln!(" {:>5.2}  | ", num_links as f32 / c);
+    eprint!(" {:>5.2}  | ", num_links as f32 / c);
+    eprint!(" {:>5.2}  | ", cdawg_nodes as f32 / c);
+    eprintln!(" {:>5.2}  | ", cdawg_edges as f32 / c);
+    // jump_index.space();
+    // jump_index.inspect_links();
     num_sampled
 }
 

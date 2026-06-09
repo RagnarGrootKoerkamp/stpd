@@ -16,7 +16,7 @@ use crate::{
 #[derive(Copy, Clone, PartialEq, PartialOrd, Eq, Ord, Debug)]
 pub struct Link {
     pub source: usize,
-    pub c: u8,
+    pub c: char,
     pub lcp: usize,
     pub target: usize,
 }
@@ -34,15 +34,15 @@ impl voracious_radix_sort::Radixable<u128> for Link {
     }
 }
 
-pub struct JumpIndex<TR: AsRef<T>, SAR: AsRef<SA>, LCPR: AsRef<LCP>> {
+pub struct JumpIndex<TR: AsRef<T>> {
     pub t: TR,
-    pub sa: SAR,
-    pub lcp: LCPR,
     pub stpd_samples: Vec<usize>,
     pub stpd_pi: Vec<u64>,
     pub stpd_rmq: rmq::BlockRmq<64>,
     // TODO: Predecessor structure
     pub links: Vec<Link>,
+    pub cdawg_nodes: usize,
+    pub cdawg_edges: usize,
 }
 
 pub struct JumpIndexStats {
@@ -50,9 +50,11 @@ pub struct JumpIndexStats {
     pub num_sources: usize,
     pub num_source_chars: usize,
     pub num_links: usize,
+    pub cdawg_nodes: usize,
+    pub cdawg_edges: usize,
 }
 
-impl<TR: AsRef<T> + Sync> JumpIndex<TR, Vec<usize>, Vec<usize>> {
+impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
     pub fn new(t: TR) -> Self {
         let (sa, lcp) = sa_and_lcp(t.as_ref());
         let bwt = &bwt(t.as_ref(), &sa);
@@ -60,8 +62,14 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR, Vec<usize>, Vec<usize>> {
         Self::new2(t, sa, bwt, lcp, &pi)
     }
 }
-impl<TR: AsRef<T> + Sync, SAR: AsRef<SA> + Sync, LCPR: AsRef<LCP> + Sync> JumpIndex<TR, SAR, LCPR> {
-    pub fn new2(t: TR, sa: SAR, bwt: &T, lcp: LCPR, pi: &Vec<usize>) -> Self {
+impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
+    pub fn new2<SAR: AsRef<SA> + Sync, LCPR: AsRef<LCP> + Sync>(
+        t: TR,
+        sa: SAR,
+        bwt: &T,
+        lcp: LCPR,
+        pi: &Vec<usize>,
+    ) -> Self {
         const PARALLEL_THRESHOLD: usize = 100_000;
 
         struct State<'a, T, SA> {
@@ -79,7 +87,7 @@ impl<TR: AsRef<T> + Sync, SAR: AsRef<SA> + Sync, LCPR: AsRef<LCP> + Sync> JumpIn
             fn split(
                 &self,
                 interval: std::ops::Range<usize>,
-            ) -> Option<(usize, usize, Vec<std::ops::Range<usize>>)> {
+            ) -> Option<(bool, usize, usize, Vec<std::ops::Range<usize>>)> {
                 if interval.len() <= 1 {
                     return None;
                 }
@@ -92,17 +100,24 @@ impl<TR: AsRef<T> + Sync, SAR: AsRef<SA> + Sync, LCPR: AsRef<LCP> + Sync> JumpIn
                     return None;
                 }
 
-                let anchor_pos = self
+                let anchor_idx = self
                     .pi_rmq
                     .query(&self.permuted_pi, interval.start, interval.end - 1)
                     .1;
+                let anchor_pos = self.sa.as_ref()[anchor_idx];
+                // eprintln!("anchor pos: {anchor_pos}");
                 let mut done_intervals = vec![];
                 let mut wip_intervals = vec![interval.clone()];
                 let lcp = self.lcp[self
                     .lcp_rmq
                     .query(&self.lcp, interval.start, interval.end - 2)
                     .1];
-                while let Some(interval) = wip_intervals.pop() {
+                // eprintln!(
+                //     "node for {}",
+                //     crate::print(&self.t.as_ref()[anchor_pos..anchor_pos + lcp as usize])
+                // );
+
+                while let Some(interval) = wip_intervals.try_remove(0) {
                     if interval.len() <= 1 {
                         done_intervals.push(interval);
                         continue;
@@ -121,7 +136,7 @@ impl<TR: AsRef<T> + Sync, SAR: AsRef<SA> + Sync, LCPR: AsRef<LCP> + Sync> JumpIn
                     wip_intervals.push(interval.start..split_pos);
                     wip_intervals.push(split_pos..interval.end);
                 }
-                Some((anchor_pos, lcp as usize, done_intervals))
+                Some((single_run, anchor_idx, lcp as usize, done_intervals))
             }
 
             fn node_output(
@@ -144,7 +159,7 @@ impl<TR: AsRef<T> + Sync, SAR: AsRef<SA> + Sync, LCPR: AsRef<LCP> + Sync> JumpIn
                             let c = self.t.as_ref()[target];
                             links.push(Link {
                                 source,
-                                c,
+                                c: c as char,
                                 lcp: co_lcp(&self.t.as_ref()[..source], &self.t.as_ref()[..target]),
                                 target,
                             });
@@ -153,18 +168,30 @@ impl<TR: AsRef<T> + Sync, SAR: AsRef<SA> + Sync, LCPR: AsRef<LCP> + Sync> JumpIn
                 }
             }
 
+            /// Returns a mask of BWT chars in interval.
             fn dfs(
                 &self,
                 interval: std::ops::Range<usize>,
                 sampled: &mut Vec<usize>,
                 links: &mut Vec<Link>,
+                cdawg_nodes: &mut usize,
+                cdawg_edges: &mut usize,
             ) {
-                let Some((anchor_pos, lcp, done_intervals)) = self.split(interval) else {
+                assert!(interval.len() > 0);
+                let Some((single_run, anchor_pos, lcp, done_intervals)) =
+                    self.split(interval.clone())
+                else {
                     return;
                 };
+                assert!(!single_run);
+                assert!(done_intervals.len() > 1);
+
                 self.node_output(anchor_pos, lcp, &done_intervals, sampled, links);
-                for x in done_intervals {
-                    self.dfs(x, sampled, links);
+                *cdawg_nodes += 1;
+                *cdawg_edges += done_intervals.len();
+
+                for x in &done_intervals {
+                    self.dfs(x.clone(), sampled, links, cdawg_nodes, cdawg_edges);
                 }
             }
 
@@ -174,22 +201,29 @@ impl<TR: AsRef<T> + Sync, SAR: AsRef<SA> + Sync, LCPR: AsRef<LCP> + Sync> JumpIn
                 sampled: &mut Vec<usize>,
                 links: &mut Vec<Link>,
                 work_queue: &mut Vec<std::ops::Range<usize>>,
+                cdawg_nodes: &mut usize,
+                cdawg_edges: &mut usize,
             ) {
                 if interval.len() < PARALLEL_THRESHOLD {
                     work_queue.push(interval);
                     return;
                 }
-                let Some((anchor_pos, lcp, done_intervals)) = self.split(interval) else {
+                let Some((single_run, anchor_pos, lcp, done_intervals)) = self.split(interval)
+                else {
                     return;
                 };
+                assert!(!single_run);
+                assert!(done_intervals.len() > 1);
+                *cdawg_nodes += 1;
+                *cdawg_edges += done_intervals.len();
+
                 self.node_output(anchor_pos, lcp, &done_intervals, sampled, links);
                 for x in done_intervals {
-                    self.collect_work(x, sampled, links, work_queue);
+                    self.collect_work(x, sampled, links, work_queue, cdawg_nodes, cdawg_edges);
                 }
             }
         }
 
-        let max_idx = t.as_ref().len() - 1;
         let run_boundaries = (0..t.as_ref().len())
             .tuple_windows()
             .filter(|(i, j)| bwt[*i] != bwt[*j])
@@ -198,6 +232,11 @@ impl<TR: AsRef<T> + Sync, SAR: AsRef<SA> + Sync, LCPR: AsRef<LCP> + Sync> JumpIn
         let run_boundaries = BTreeSet::from_iter(run_boundaries);
 
         let permuted_pi: Vec<usize> = sa.as_ref().par_iter().map(|&i| pi[i]).collect();
+        // eprintln!();
+        // eprintln!("sa:  {:?}", sa.as_ref());
+        // eprintln!("lcp: {:?}", lcp.as_ref());
+        // eprintln!("ppi: {:?}", permuted_pi);
+        // eprintln!("run boundaries: {:?}", run_boundaries);
 
         use rmq::Rmq as _;
         let lcp_u64: Vec<u64> = lcp.as_ref().iter().map(|&x| x as u64).collect();
@@ -215,26 +254,40 @@ impl<TR: AsRef<T> + Sync, SAR: AsRef<SA> + Sync, LCPR: AsRef<LCP> + Sync> JumpIn
         let mut stpd_samples = vec![];
         let mut links = vec![];
         let mut work_queue = vec![];
+        let mut cdawg_nodes = 1; // the final node
+        let mut cdawg_edges = 0;
         state.collect_work(
             0..state.t.as_ref().len(),
             &mut stpd_samples,
             &mut links,
             &mut work_queue,
+            &mut cdawg_nodes,
+            &mut cdawg_edges,
         );
 
         use rayon::prelude::*;
-        let child_results: Vec<(Vec<usize>, Vec<Link>)> = work_queue
+        let child_results: Vec<(Vec<usize>, Vec<Link>, usize, usize)> = work_queue
             .into_par_iter()
             .map(|interval| {
                 let mut sampled = vec![];
                 let mut links = vec![];
-                state.dfs(interval, &mut sampled, &mut links);
-                (sampled, links)
+                let mut cdawg_nodes = 0;
+                let mut cdawg_edges = 0;
+                state.dfs(
+                    interval,
+                    &mut sampled,
+                    &mut links,
+                    &mut cdawg_nodes,
+                    &mut cdawg_edges,
+                );
+                (sampled, links, cdawg_nodes, cdawg_edges)
             })
             .collect();
-        for (s, l) in child_results {
+        for (s, l, cn, ce) in child_results {
             stpd_samples.extend(s);
             links.extend(l);
+            cdawg_nodes += cn;
+            cdawg_edges += ce;
         }
 
         let State { t, sa, .. } = state;
@@ -248,22 +301,22 @@ impl<TR: AsRef<T> + Sync, SAR: AsRef<SA> + Sync, LCPR: AsRef<LCP> + Sync> JumpIn
 
         stpd_samples.sort_by(|&a, &b| cmp_colex(&t.as_ref()[..=a], &t.as_ref()[..=b]).1);
         let stpd_pi: Vec<u64> = stpd_samples.iter().map(|&x| pi[x] as u64).collect();
-        stpd_samples.iter().take(10).for_each(|&i| {
-            eprintln!(
-                "{i:>3}: {} ({})",
-                print(&t.as_ref()[i.saturating_sub(30)..=i]),
-                pi[i]
-            );
-        });
+        // stpd_samples.iter().take(10).for_each(|&i| {
+        //     eprintln!(
+        //         "{i:>3}: {} ({})",
+        //         print(&t.as_ref()[i.saturating_sub(30)..=i]),
+        //         pi[i]
+        //     );
+        // });
 
         JumpIndex {
             t,
-            sa,
-            lcp,
             stpd_samples,
             stpd_rmq: rmq::BlockRmq::build(&stpd_pi),
             stpd_pi,
             links,
+            cdawg_nodes,
+            cdawg_edges,
         }
     }
 
@@ -293,7 +346,59 @@ impl<TR: AsRef<T> + Sync, SAR: AsRef<SA> + Sync, LCPR: AsRef<LCP> + Sync> JumpIn
                 .tuple_windows()
                 .filter(|(a, b)| a != b)
                 .count(),
+            cdawg_nodes: self.cdawg_nodes,
+            cdawg_edges: self.cdawg_edges,
         }
+    }
+
+    pub fn inspect_links(&self) {
+        eprintln!("Links: {}", self.links.len());
+        if self.links.len() < 10000 {
+            for i in 0..self.links.len() {
+                eprintln!("{i:>8} {:?}", self.links[i]);
+            }
+        } else {
+            for i in (0..self.links.len()).step_by(100000) {
+                for i in i..i + 100 {
+                    eprintln!("{i:>8} {:?}", self.links[i]);
+                }
+                eprintln!("---");
+            }
+        }
+        eprintln!("---");
+
+        eprintln!("Samples: {}", self.stpd_samples.len());
+        if self.stpd_samples.len() < 30000 {
+            for i in 0..self.stpd_samples.len() {
+                eprintln!("{i:>8} {:>7}", self.stpd_samples[i]);
+            }
+        } else {
+            for i in (0..self.stpd_samples.len()).step_by(100000) {
+                for i in i..i + 100 {
+                    eprintln!("{i:>8} {:>7}", self.stpd_samples[i]);
+                }
+                eprintln!("---");
+            }
+        }
+    }
+
+    pub fn space(&self) {
+        eprintln!(
+            "stpd samples {}B",
+            std::mem::size_of_val(self.stpd_samples.as_slice())
+        );
+        eprintln!(
+            "stpd pi      {}B",
+            std::mem::size_of_val(self.stpd_pi.as_slice())
+        );
+        // eprintln!(
+        //     "stpd rmq     {}",
+        //     std::mem::size_of_val(self.stpd_rmq.as_slice())
+        // );
+        eprintln!(
+            "jump index   {}B",
+            std::mem::size_of_val(self.links.as_slice())
+        );
     }
 
     /// Returns leftmost text position where the pattern matches.
@@ -353,7 +458,7 @@ impl<TR: AsRef<T> + Sync, SAR: AsRef<SA> + Sync, LCPR: AsRef<LCP> + Sync> JumpIn
                     link.key().cmp(
                         &Link {
                             source: pos,
-                            c,
+                            c: c as char,
                             lcp: i,
                             target: 0,
                         }
@@ -363,7 +468,7 @@ impl<TR: AsRef<T> + Sync, SAR: AsRef<SA> + Sync, LCPR: AsRef<LCP> + Sync> JumpIn
                 .map_or_else(|e| e, |v| v);
             let link = self.links[link_idx];
             // eprintln!("pos {pos} link {link:?}");
-            if link.source == pos && link.c == c {
+            if link.source == pos && link.c as u8 == c {
                 pos = link.target + 1;
             } else {
                 return None;

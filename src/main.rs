@@ -75,6 +75,8 @@ fn stats((name, t): &(String, T), print: bool) {
     // let normalized_tree_size = tree_size / n;
 
     let bwt = &bwt(t, sa);
+    // eprintln!("t:   {}", crate::print(t));
+    // eprintln!("bwt: {}", crate::print(bwt));
     let r = r(bwt);
 
     // // slow
@@ -87,15 +89,16 @@ fn stats((name, t): &(String, T), print: bool) {
     // let chi_pd2 = chi_pd2(t, sa, lcp);
     // // slow
 
-    let n = n as f32 / 1000000.;
-    let r = r as f32 / 1000000.;
-    eprint!("| {name} | {n:>6.2} | {r:>6.2} | pos-   | ");
+    let c = 1.;
+    let n = n as f32 / c;
+    let r = r as f32 / c;
+    eprint!("| {name:<30} | {n:>6.2} | {r:>6.2} | pos-   | ");
     let stpd_pos_minus = stpd_pos_minus(t, sa, bwt, lcp);
-    eprint!("| {name} | {n:>6.2} | {r:>6.2} | pos+   | ");
-    let stpd_pos_minus = stpd_pos_plus(t, sa, bwt, lcp);
-    eprint!("| {name} | {n:>6.2} | {r:>6.2} | lex-   | ");
+    // eprint!("| {name} | {n:>6.2} | {r:>6.2} | pos+   | ");
+    // let stpd_pos_plus = stpd_pos_plus(t, sa, bwt, lcp);
+    eprint!("| {:<30} | {:>6} | {:>6} | lex-   | ", "", "", "");
     let stpd_lex_minus = stpd_lex_minus(t, sa, bwt, lcp);
-    eprint!("| {name} | {n:>6.2} | {r:>6.2} | colex- | ");
+    eprint!("| {:<30} | {:>6} | {:>6} | colex- | ", "", "", "");
     let stpd_colex_minus = stpd_colex_minus(t, sa, bwt, lcp);
 
     // // let plcp = plcp(t, sa, lcp);
@@ -215,9 +218,13 @@ fn main() {
     header();
     let repeated = relative(200, 4, 20, 0.05);
     let texts = [
+        // vec![
+        //     ("manual".to_string(), b"AGAGCGAGAGCGCGC#".to_vec()),
+        // ],
         pizzachili(dataset.as_deref()),
         // variants(fib(15)),
         vec![
+            // relative(100, 4, 200, 0.01),
             // random(3_200_000_00, 4),
             // thue_morse(10),
             // random(100, 4),
@@ -237,15 +244,14 @@ fn main() {
             // relative(10, 4, 2, 0.01),
             // relative(10, 4, 4, 0.01),
             // relative(10, 4, 8, 0.01),
-            // relative(500, 2, 1, 0.01),
-            // relative(500, 2, 2, 0.01),
-            // relative(500, 2, 4, 0.01),
-            // relative(500, 2, 8, 0.01),
-            // relative(500, 4, 1, 0.01),
-            // relative(500, 4, 2, 0.01),
-            // relative(500, 4, 4, 0.01),
-            // relative(500, 4, 8, 0.01),
-            // relative(500, 4, 16, 0.01),
+            // relative(10000, 2, 1, 0.001),
+            // relative(10000, 2, 2, 0.001),
+            // relative(10000, 2, 128, 0.001),
+            // relative(10000, 2, 1024, 0.001),
+            // relative(10000, 4, 1, 0.001),
+            // relative(10000, 4, 2, 0.001),
+            // relative(10000, 4, 128, 0.001),
+            // relative(10000, 4, 1024, 0.001),
             // relative(100000, 4, 1, 0.00),
             // relative(100000, 4, 2, 0.00),
             // relative(100000, 4, 3, 0.00),
