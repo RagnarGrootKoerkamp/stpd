@@ -25,7 +25,7 @@ pub fn print(t: &[u8]) -> String {
 
 pub fn sa(t: &T) -> SA {
     libsais::SuffixArrayConstruction::for_text(t.as_slice())
-        .in_owned_buffer32()
+        .in_owned_buffer64()
         .multi_threaded(libsais::ThreadCount::openmp_default())
         .run()
         .unwrap()
@@ -43,7 +43,7 @@ fn co_sa(t: &T) -> Vec<usize> {
 
 pub fn sa_and_lcp(t: &T) -> (SA, LCP) {
     let sa_builder = libsais::SuffixArrayConstruction::for_text(t.as_slice())
-        .in_owned_buffer32()
+        .in_owned_buffer64()
         .multi_threaded(libsais::ThreadCount::openmp_default())
         .run()
         .unwrap();
