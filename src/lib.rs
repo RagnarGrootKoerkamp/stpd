@@ -67,7 +67,7 @@ pub fn sa_and_lcp(t: &T) -> (SA, LCP) {
         .multi_threaded(libsais::ThreadCount::openmp_default())
         .run()
         .unwrap();
-    eprintln!("SA:   {} GB", std::mem::size_of_val(sa_builder.suffix_array()) as f32 / 1e9);
+    eprintln!("SA:   {:.3} GB", std::mem::size_of_val(sa_builder.suffix_array()) as f32 / 1e9);
 
     let n = t.len();
     eprintln!("building plcp..");
@@ -75,21 +75,21 @@ pub fn sa_and_lcp(t: &T) -> (SA, LCP) {
     .multi_threaded(libsais::ThreadCount::openmp_default())
     .run()
     .unwrap();
-    eprintln!("PLCP: {} GB", std::mem::size_of_val(plcp_builder.plcp()) as f32 / 1e9);
+    eprintln!("PLCP: {:.3} GB", std::mem::size_of_val(plcp_builder.plcp()) as f32 / 1e9);
 
     let (sa, plcp, _) = plcp_builder.into_parts();
 
     // Shrink types by progressively freeing allocations.
     eprintln!("shrinking..");
     let sa = shrink_vec(sa, |x| TryInto::<SaElem>::try_into(x).unwrap());
-    eprintln!("SA:   {} GB", std::mem::size_of_val(sa.as_slice()) as f32 / 1e9);
+    eprintln!("SA:   {:.3} GB", std::mem::size_of_val(sa.as_slice()) as f32 / 1e9);
     let plcp = shrink_vec(plcp, |x|  TryInto::<LcpElem>::try_into(x).unwrap());
-    eprintln!("PLCP: {} GB", std::mem::size_of_val(plcp.as_slice()) as f32 / 1e9);
+    eprintln!("PLCP: {:.3} GB", std::mem::size_of_val(plcp.as_slice()) as f32 / 1e9);
 
     // Manually convert PLCP to LCP after shrinking allocations.
     let mut lcp: LCP = (0..n).into_par_iter().map(|i| plcp[sa[i] as usize]).collect();
 
-    eprintln!("LCP:  {} GB", std::mem::size_of_val(lcp.as_slice()) as f32 / 1e9);
+    eprintln!("LCP:  {:.3} GB", std::mem::size_of_val(lcp.as_slice()) as f32 / 1e9);
 
     // Drop the sentinel at index 0; the remaining n-1 values correspond to lcp[0..n-1].
     lcp.remove(0);

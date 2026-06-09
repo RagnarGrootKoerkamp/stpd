@@ -93,12 +93,15 @@ fn stats((name, t): &(String, T), print: bool) {
     let n = n as f32 / c;
     let r = r as f32 / c;
     eprint!("| {name:<30} | {n:>6.2} | {r:>6.2} | pos-   | ");
+    eprintln!();
     let stpd_pos_minus = stpd_pos_minus(t, sa, bwt, lcp);
     // eprint!("| {name} | {n:>6.2} | {r:>6.2} | pos+   | ");
     // let stpd_pos_plus = stpd_pos_plus(t, sa, bwt, lcp);
     eprint!("| {:<30} | {:>6} | {:>6} | lex-   | ", "", "", "");
+    eprintln!();
     let stpd_lex_minus = stpd_lex_minus(t, sa, bwt, lcp);
     eprint!("| {:<30} | {:>6} | {:>6} | colex- | ", "", "", "");
+    eprintln!();
     let stpd_colex_minus = stpd_colex_minus(t, sa, bwt, lcp);
 
     // // let plcp = plcp(t, sa, lcp);

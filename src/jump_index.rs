@@ -77,7 +77,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
             t: T,
             sa: &'a SA,
             lcp: &'a LCP,
-            run_boundaries: BTreeSet<usize>,
+            run_boundaries: Vec<SaElem>,
             lcp_rmq: rmq::BlockRmq<crate::LcpElem, 128>,
             permuted_pi: &'a SA,
             pi_rmq: rmq::BlockRmq<SaElem, 128>,
@@ -91,26 +91,19 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                 if interval.len() <= 1 {
                     return None;
                 }
-                let single_run = self
+                let idx = self
                     .run_boundaries
-                    .range(interval.start..interval.end - 1)
-                    .next()
-                    .is_none();
+                    .binary_search(&(interval.start as SaElem))
+                    .unwrap_or_else(|x| x);
+                let single_run = idx == self.run_boundaries.len()
+                    || self.run_boundaries[idx] >= interval.end as SaElem - 1;
                 if single_run {
                     return None;
                 }
 
                 let anchor_idx = self
                     .pi_rmq
-                    .query(
-                        if self.permuted_pi.as_ref().is_empty() {
-                            self.sa.as_ref()
-                        } else {
-                            self.permuted_pi.as_ref()
-                        },
-                        interval.start,
-                        interval.end - 1,
-                    )
+                    .query(self.permuted_pi.as_ref(), interval.start, interval.end - 1)
                     .1;
                 // let _anchor_pos = self.sa.as_ref()[anchor_idx];
                 // eprintln!("anchor pos: {anchor_pos}");
@@ -152,27 +145,20 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                 anchor_pos: usize,
                 lcp: usize,
                 done_intervals: &[std::ops::Range<usize>],
-                sampled: &mut Vec<usize>,
+                _sampled: &mut Vec<usize>,
                 links: &mut Vec<Link>,
             ) {
                 for x in done_intervals {
                     if !x.contains(&anchor_pos) {
                         let secondary_anchor_pos = self
                             .pi_rmq
-                            .query(
-                                if self.permuted_pi.as_ref().is_empty() {
-                                    self.sa.as_ref()
-                                } else {
-                                    self.permuted_pi.as_ref()
-                                },
-                                x.start,
-                                x.end - 1,
-                            )
+                            .query(self.permuted_pi.as_ref(), x.start, x.end - 1)
                             .1;
                         let text_idx = self.sa.as_ref()[secondary_anchor_pos] as usize;
                         let target = text_idx + lcp as usize;
                         if target < self.t.as_ref().len() {
-                            sampled.push(target);
+                            // NOTE: STPD samples are skipped for now.
+                            // sampled.push(target);
                             let source = self.sa.as_ref()[anchor_pos] as usize + lcp as usize;
                             let c = self.t.as_ref()[target];
                             links.push(Link {
@@ -245,21 +231,21 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
         let run_boundaries = (0..t.as_ref().len())
             .tuple_windows()
             .filter(|(i, j)| bwt[*i] != bwt[*j])
-            .map(|(i, _j)| i)
+            .map(|(i, _j)| i as SaElem)
             .collect_vec();
         eprintln!(
-            "Run boundaries: {}B",
-            std::mem::size_of_val(run_boundaries.as_slice())
+            "Run boundaries: {:.3} GB",
+            std::mem::size_of_val(run_boundaries.as_slice()) as f32 / 1e9
         );
-        let run_boundaries = BTreeSet::from_iter(run_boundaries);
-        let s = mem_dbg::MemSize::mem_size(&run_boundaries, SizeFlags::default());
-        eprintln!("Run boundaries set: {}B", s);
+        // let run_boundaries = BTreeSet::from_iter(run_boundaries);
+        // let s = mem_dbg::MemSize::mem_size(&run_boundaries, SizeFlags::default());
+        // eprintln!("Run boundaries set: {:.3} GB", s as f32 / 1e9);
 
         // empty indicates pi=identity and permuted_pi = sa.
-        let permuted_pi: SA = if pi.is_empty() {
-            vec![]
+        let permuted_pi: &SA = if pi.is_empty() {
+            &sa.as_ref()
         } else {
-            sa.as_ref().par_iter().map(|&i| pi[i as usize]).collect()
+            &sa.as_ref().par_iter().map(|&i| pi[i as usize]).collect()
         };
 
         // eprintln!();
@@ -311,8 +297,8 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                 (sampled, links, cdawg_nodes, cdawg_edges)
             })
             .collect();
-        for (s, l, cn, ce) in child_results {
-            stpd_samples.extend(s);
+        for (_s, l, cn, ce) in child_results {
+            // stpd_samples.extend(s);
             links.extend(l);
             cdawg_nodes += cn;
             cdawg_edges += ce;
@@ -324,15 +310,23 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
         stpd_samples.voracious_mt_sort(12);
         links.voracious_mt_sort(12);
 
+        eprintln!(
+            "Links: {:.3} GB",
+            std::mem::size_of_val(links.as_slice()) as f32 / 1e9
+        );
         stpd_samples.dedup();
         links.dedup();
+        eprintln!(
+            "Links: {:.3} GB (deduped)",
+            std::mem::size_of_val(links.as_slice()) as f32 / 1e9
+        );
 
         stpd_samples.sort_by(|&a, &b| cmp_colex(&t.as_ref()[..=a], &t.as_ref()[..=b]).1);
         let stpd_pi: Vec<u64> = stpd_samples.iter().map(|&x| pi[x] as u64).collect();
         // stpd_samples.iter().take(10).for_each(|&i| {
         //     eprintln!(
         //         "{i:>3}: {} ({})",
-        //         print(&t.as_ref()[i.saturating_sub(30)..=i]),
+        //         crate::print(&t.as_ref()[i.saturating_sub(30)..=i]),
         //         pi[i]
         //     );
         // });
@@ -412,20 +406,20 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
 
     pub fn space(&self) {
         eprintln!(
-            "stpd samples {}B",
-            std::mem::size_of_val(self.stpd_samples.as_slice())
+            "stpd samples {:.3} GB",
+            std::mem::size_of_val(self.stpd_samples.as_slice()) as f32 / 1e9
         );
         eprintln!(
-            "stpd pi      {}B",
-            std::mem::size_of_val(self.stpd_pi.as_slice())
+            "stpd pi      {:.3} GB",
+            std::mem::size_of_val(self.stpd_pi.as_slice()) as f32 / 1e9
         );
         // eprintln!(
-        //     "stpd rmq     {}",
-        //     std::mem::size_of_val(self.stpd_rmq.as_slice())
+        //     "stpd rmq     {:.3} GB",
+        //     std::mem::size_of_val(self.stpd_rmq.as_slice()) as f32 / 1e9
         // );
         eprintln!(
-            "jump index   {}B",
-            std::mem::size_of_val(self.links.as_slice())
+            "jump index   {:.3} GB",
+            std::mem::size_of_val(self.links.as_slice()) as f32 / 1e9
         );
     }
 
