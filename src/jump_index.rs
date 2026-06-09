@@ -75,7 +75,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
         struct State<'a, T, SA> {
             t: T,
             sa: SA,
-            lcp: Vec<u64>,
+            lcp: &'a LCP,
             run_boundaries: BTreeSet<usize>,
             lcp_rmq: rmq::BlockRmq<128>,
             #[allow(unused)]
@@ -239,14 +239,13 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
         // eprintln!("run boundaries: {:?}", run_boundaries);
 
         use rmq::Rmq as _;
-        let lcp_u64: Vec<u64> = lcp.as_ref().iter().map(|&x| x as u64).collect();
         let permuted_pi: Vec<u64> = permuted_pi.iter().map(|&x| x as u64).collect();
         let state = State {
             t,
             sa,
             run_boundaries,
-            lcp_rmq: rmq::BlockRmq::build(&lcp_u64),
-            lcp: lcp_u64,
+            lcp_rmq: rmq::BlockRmq::build(lcp.as_ref()),
+            lcp: lcp.as_ref(),
             pi_rmq: rmq::BlockRmq::build(&permuted_pi),
             permuted_pi: &permuted_pi,
         };

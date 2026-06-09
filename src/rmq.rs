@@ -1,16 +1,18 @@
 #![allow(unused)]
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
+type T = crate::LcpElem;
+
 pub trait Rmq {
     fn name() -> String;
     /// To save time, only run benchmarks up to this n.
     fn max_n() -> usize {
         usize::MAX
     }
-    fn build(data: &[u64]) -> Self;
+    fn build(data: &[T]) -> Self;
     /// Space usage in bytes.
     fn space(&self) -> usize;
-    fn query(&self, data: &[u64], l: usize, r: usize) -> (u64, usize);
+    fn query(&self, data: &[T], l: usize, r: usize) -> (T, usize);
 }
 
 // -------------------------------------------------------------
@@ -30,13 +32,13 @@ impl<const S: usize> Rmq for BlockRmq<S> {
     fn name() -> String {
         format!("BlockRmq<{S}>")
     }
-    fn build(data: &[u64]) -> Self {
+    fn build(data: &[T]) -> Self {
         assert!(
             S <= 256,
             "Block size S must fit in u8 for position encoding"
         );
         let n = data.len();
-        let (block_mins, block_min_pos): (Vec<u64>, Vec<u8>) = (0..(n + S - 1) / S)
+        let (block_mins, block_min_pos): (Vec<T>, Vec<u8>) = (0..(n + S - 1) / S)
             .into_par_iter()
             .map(|b| {
                 (b * S..(b * S + S).min(n))
@@ -53,7 +55,7 @@ impl<const S: usize> Rmq for BlockRmq<S> {
     fn space(&self) -> usize {
         self.sparse.space()
     }
-    fn query(&self, data: &[u64], l: usize, r: usize) -> (u64, usize) {
+    fn query(&self, data: &[T], l: usize, r: usize) -> (T, usize) {
         let block_l = l / S;
         let block_r = r / S;
         if block_l == block_r {
@@ -66,7 +68,7 @@ impl<const S: usize> Rmq for BlockRmq<S> {
             let idx = self.block_min_pos[block_idx];
             (val, block_idx * S + idx as usize)
         } else {
-            (u64::MAX, usize::MAX)
+            (T::MAX, usize::MAX)
         };
         suffix.min(prefix).min(mid)
     }
@@ -78,8 +80,8 @@ impl<const S: usize> Rmq for BlockRmq<S> {
 /// `prefix_min[i]` = min(data[block_start ..= i])
 /// `suffix_min[i]` = min(data[i ..= block_end])
 pub struct BlockRmqPrecomputed<const S: usize> {
-    prefix_min: Vec<(u64, usize)>,
-    suffix_min: Vec<(u64, usize)>,
+    prefix_min: Vec<(T, usize)>,
+    suffix_min: Vec<(T, usize)>,
     block_min_pos: Vec<usize>,
     sparse: SparseTable,
 }
@@ -87,11 +89,11 @@ impl<const S: usize> Rmq for BlockRmqPrecomputed<S> {
     fn name() -> String {
         format!("BlockPSRmq<{S}>")
     }
-    fn build(data: &[u64]) -> Self {
+    fn build(data: &[T]) -> Self {
         let n = data.len();
         let num_blocks = (n + S - 1) / S;
-        let mut prefix_min = vec![(0u64, 0); n];
-        let mut suffix_min = vec![(0u64, 0); n];
+        let mut prefix_min = vec![(0 as T, 0); n];
+        let mut suffix_min = vec![(0 as T, 0); n];
 
         for b in 0..num_blocks {
             let lo = b * S;
@@ -108,7 +110,7 @@ impl<const S: usize> Rmq for BlockRmqPrecomputed<S> {
             }
         }
 
-        let (block_mins, block_min_pos): (Vec<u64>, Vec<usize>) = (0..num_blocks)
+        let (block_mins, block_min_pos): (Vec<T>, Vec<usize>) = (0..num_blocks)
             .into_par_iter()
             .map(|b| prefix_min[(b * S + S).min(n) - 1])
             .unzip();
@@ -125,7 +127,7 @@ impl<const S: usize> Rmq for BlockRmqPrecomputed<S> {
             + std::mem::size_of_val(self.suffix_min.as_slice())
             + self.sparse.space()
     }
-    fn query(&self, data: &[u64], l: usize, r: usize) -> (u64, usize) {
+    fn query(&self, data: &[T], l: usize, r: usize) -> (T, usize) {
         let block_l = l / S;
         let block_r = r / S;
         if block_l == block_r {
@@ -138,7 +140,7 @@ impl<const S: usize> Rmq for BlockRmqPrecomputed<S> {
             let idx = self.block_min_pos[block_idx];
             (val, idx)
         } else {
-            (u64::MAX, usize::MAX)
+            (T::MAX, usize::MAX)
         };
         suffix.min(prefix).min(mid)
     }
@@ -149,13 +151,13 @@ impl<const S: usize> Rmq for BlockRmqPrecomputed<S> {
 /// `table[k][i]` = minimum of `data[i .. i + 2^k]`.
 /// Query [l, r]: let k = floor(log2(r - l + 1)), return min(table[k][l], table[k][r - 2^k + 1]).
 struct SparseTable {
-    table: Vec<Vec<(u64, usize)>>,
+    table: Vec<Vec<(T, usize)>>,
 }
 impl Rmq for SparseTable {
     fn name() -> String {
         "SparseTable".to_string()
     }
-    fn build(data: &[u64]) -> Self {
+    fn build(data: &[T]) -> Self {
         let n = data.len();
         let levels = if n <= 1 {
             1
@@ -163,7 +165,7 @@ impl Rmq for SparseTable {
             usize::BITS as usize - n.leading_zeros() as usize
         };
 
-        let mut table: Vec<Vec<(u64, usize)>> = Vec::with_capacity(levels);
+        let mut table: Vec<Vec<(T, usize)>> = Vec::with_capacity(levels);
         table.push(data.iter().enumerate().map(|(i, x)| (*x, i)).collect());
         for k in 1..levels {
             let half = 1 << (k - 1);
@@ -182,7 +184,7 @@ impl Rmq for SparseTable {
             .map(|row| std::mem::size_of_val(row.as_slice()))
             .sum::<usize>()
     }
-    fn query(&self, _data: &[u64], l: usize, r: usize) -> (u64, usize) {
+    fn query(&self, _data: &[T], l: usize, r: usize) -> (T, usize) {
         let k = usize::BITS as usize - (r - l + 1).leading_zeros() as usize - 1;
         self.table[k][l].min(self.table[k][r - (1 << k) + 1])
     }
