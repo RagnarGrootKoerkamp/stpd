@@ -1,6 +1,8 @@
 #![allow(unused)]
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
+use crate::SaElem;
+
 pub trait RmqElem: Copy + Ord + std::fmt::Debug + Send + Sync {
     const MAX: Self;
 }
@@ -44,7 +46,8 @@ pub trait Rmq<T: RmqElem> {
 /// - Across blocks: suffix scan of first block, sparse table on interior blocks, prefix scan of last block.
 pub struct BlockRmq<T: RmqElem, const S: usize> {
     block_min_pos: Vec<u8>,
-    sparse: SparseTable<T>,
+    // sparse: SparseTable<T>,
+    segtree: SegmentTree<T>,
 }
 impl<T: RmqElem, const S: usize> Rmq<T> for BlockRmq<T, S> {
     fn name() -> String {
@@ -67,11 +70,13 @@ impl<T: RmqElem, const S: usize> Rmq<T> for BlockRmq<T, S> {
             .unzip();
         BlockRmq {
             block_min_pos,
-            sparse: SparseTable::build(&block_mins),
+            // sparse: SparseTable::build(&block_mins),
+            segtree: SegmentTree::build(&block_mins),
         }
     }
     fn space(&self) -> usize {
-        self.sparse.space()
+        // self.sparse.space()
+        self.segtree.space()
     }
     fn query(&self, data: &[T], l: usize, r: usize) -> (T, usize) {
         let block_l = l / S;
@@ -82,7 +87,7 @@ impl<T: RmqElem, const S: usize> Rmq<T> for BlockRmq<T, S> {
         let suffix = (l..(block_l + 1) * S).map(|i| (data[i], i)).min().unwrap();
         let prefix = (block_r * S..r + 1).map(|i| (data[i], i)).min().unwrap();
         let mid = if block_r > block_l + 1 {
-            let (val, block_idx) = self.sparse.query(data, block_l + 1, block_r - 1);
+            let (val, block_idx) = self.segtree.query(data, block_l + 1, block_r - 1);
             let idx = self.block_min_pos[block_idx];
             (val, block_idx * S + idx as usize)
         } else {
@@ -101,7 +106,8 @@ pub struct BlockRmqPrecomputed<T: RmqElem, const S: usize> {
     prefix_min: Vec<(T, usize)>,
     suffix_min: Vec<(T, usize)>,
     block_min_pos: Vec<usize>,
-    sparse: SparseTable<T>,
+    // sparse: SparseTable<T>,
+    segtree: SegmentTree<T>,
 }
 impl<T: RmqElem, const S: usize> Rmq<T> for BlockRmqPrecomputed<T, S> {
     fn name() -> String {
@@ -137,13 +143,15 @@ impl<T: RmqElem, const S: usize> Rmq<T> for BlockRmqPrecomputed<T, S> {
             prefix_min,
             suffix_min,
             block_min_pos,
-            sparse: SparseTable::build(&block_mins),
+            // sparse: SparseTable::build(&block_mins),
+            segtree: SegmentTree::build(&block_mins),
         }
     }
     fn space(&self) -> usize {
         std::mem::size_of_val(self.prefix_min.as_slice())
             + std::mem::size_of_val(self.suffix_min.as_slice())
-            + self.sparse.space()
+            // + self.sparse.space()
+            + self.segtree.space()
     }
     fn query(&self, data: &[T], l: usize, r: usize) -> (T, usize) {
         let block_l = l / S;
@@ -154,7 +162,7 @@ impl<T: RmqElem, const S: usize> Rmq<T> for BlockRmqPrecomputed<T, S> {
         let suffix = self.suffix_min[l];
         let prefix = self.prefix_min[r];
         let mid = if block_r > block_l + 1 {
-            let (val, block_idx) = self.sparse.query(data, block_l + 1, block_r - 1);
+            let (val, block_idx) = self.segtree.query(data, block_l + 1, block_r - 1);
             let idx = self.block_min_pos[block_idx];
             (val, idx)
         } else {
@@ -207,6 +215,60 @@ impl<T: RmqElem> Rmq<T> for SparseTable<T> {
     fn query(&self, _data: &[T], l: usize, r: usize) -> (T, usize) {
         let k = usize::BITS as usize - (r - l + 1).leading_zeros() as usize - 1;
         let (x, idx) = self.table[k][l].min(self.table[k][r - (1 << k) + 1]);
+        (x, idx as usize)
+    }
+}
+
+/// Segment tree storing the range minimum.
+///
+/// Uses a 1-indexed implicit binary tree over the next power-of-two many leaves.
+/// `tree[1]` is the root; children of node `i` are `2i` and `2i+1`.
+/// Leaves are at indices `[size, 2*size)` where `size = n.next_power_of_two()`.
+/// Space: 2 × (next power of two ≥ n) × 8 bytes ≈ 2n words.
+/// Build: O(n).  Query: O(log n).
+struct SegmentTree<T: RmqElem> {
+    tree: Vec<(T, I)>,
+    size: usize,
+}
+
+impl<'a, T: RmqElem> Rmq<T> for SegmentTree<T> {
+    fn name() -> String {
+        "SegmentTree".to_string()
+    }
+    fn build(data: &[T]) -> Self {
+        let n = data.len();
+        let size = n.next_power_of_two();
+        let mut tree = vec![(T::MAX, 0); 2 * size];
+        // Copy leaves.
+        for (i, &v) in data.iter().enumerate() {
+            tree[size + i] = (v, i as I);
+        }
+        // Fill internal nodes bottom-up.
+        for i in (1..size).rev() {
+            tree[i] = tree[2 * i].min(tree[2 * i + 1]);
+        }
+        SegmentTree { tree, size }
+    }
+    fn space(&self) -> usize {
+        std::mem::size_of_val(self.tree.as_slice())
+    }
+    fn query(&self, _data: &[T], mut l: usize, mut r: usize) -> (T, usize) {
+        let mut res = (T::MAX, I::MAX);
+        l += self.size;
+        r += self.size + 1;
+        while l < r {
+            if l & 1 == 1 {
+                res = res.min(self.tree[l]);
+                l += 1;
+            }
+            if r & 1 == 1 {
+                r -= 1;
+                res = res.min(self.tree[r]);
+            }
+            l >>= 1;
+            r >>= 1;
+        }
+        let (x, idx) = res;
         (x, idx as usize)
     }
 }
