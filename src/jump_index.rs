@@ -10,7 +10,7 @@ use crate::{
     rmq::{self, Rmq},
     sa_and_lcp,
     stpd::cmp_colex,
-    LCP, SA, T,
+    SaElem, LCP, SA, T,
 };
 
 #[derive(Copy, Clone, PartialEq, PartialOrd, Eq, Ord, Debug)]
@@ -58,8 +58,8 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
     pub fn new(t: TR) -> Self {
         let (sa, lcp) = sa_and_lcp(t.as_ref());
         let bwt = &bwt(t.as_ref(), &sa);
-        let pi = (0..t.as_ref().len()).collect_vec();
-        Self::new2(t, sa, bwt, lcp, &pi)
+        // let pi = (0..t.as_ref().len()).collect_vec();
+        Self::new2(t, sa, bwt, lcp, &vec![])
     }
 }
 impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
@@ -68,19 +68,18 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
         sa: SAR,
         bwt: &T,
         lcp: LCPR,
-        pi: &Vec<usize>,
+        pi: &SA,
     ) -> Self {
         const PARALLEL_THRESHOLD: usize = 100_000;
 
         struct State<'a, T, SA> {
             t: T,
-            sa: SA,
+            sa: &'a SA,
             lcp: &'a LCP,
             run_boundaries: BTreeSet<usize>,
             lcp_rmq: rmq::BlockRmq<crate::LcpElem, 128>,
-            #[allow(unused)]
-            permuted_pi: &'a Vec<u64>,
-            pi_rmq: rmq::BlockRmq<u64, 128>,
+            permuted_pi: &'a SA,
+            pi_rmq: rmq::BlockRmq<SaElem, 128>,
         }
 
         impl<'a, TR: AsRef<T>, SAR: AsRef<SA>> State<'a, TR, SAR> {
@@ -102,7 +101,15 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
 
                 let anchor_idx = self
                     .pi_rmq
-                    .query(&self.permuted_pi, interval.start, interval.end - 1)
+                    .query(
+                        if self.permuted_pi.as_ref().is_empty() {
+                            self.sa.as_ref()
+                        } else {
+                            self.permuted_pi.as_ref()
+                        },
+                        interval.start,
+                        interval.end - 1,
+                    )
                     .1;
                 // let _anchor_pos = self.sa.as_ref()[anchor_idx];
                 // eprintln!("anchor pos: {anchor_pos}");
@@ -149,8 +156,18 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
             ) {
                 for x in done_intervals {
                     if !x.contains(&anchor_pos) {
-                        let secondary_anchor_pos =
-                            self.pi_rmq.query(&self.permuted_pi, x.start, x.end - 1).1;
+                        let secondary_anchor_pos = self
+                            .pi_rmq
+                            .query(
+                                if self.permuted_pi.as_ref().is_empty() {
+                                    self.sa.as_ref()
+                                } else {
+                                    self.permuted_pi.as_ref()
+                                },
+                                x.start,
+                                x.end - 1,
+                            )
+                            .1;
                         let text_idx = self.sa.as_ref()[secondary_anchor_pos] as usize;
                         let target = text_idx + lcp as usize;
                         if target < self.t.as_ref().len() {
@@ -231,7 +248,9 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
             .collect_vec();
         let run_boundaries = BTreeSet::from_iter(run_boundaries);
 
-        let permuted_pi: Vec<usize> = sa.as_ref().par_iter().map(|&i| pi[i as usize]).collect();
+        // empty indicates pi=identity and permuted_pi = sa.
+        let permuted_pi: SA = sa.as_ref().par_iter().map(|&i| pi[i as usize]).collect();
+
         // eprintln!();
         // eprintln!("sa:  {:?}", sa.as_ref());
         // eprintln!("lcp: {:?}", lcp.as_ref());
@@ -239,10 +258,9 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
         // eprintln!("run boundaries: {:?}", run_boundaries);
 
         use rmq::Rmq as _;
-        let permuted_pi: Vec<u64> = permuted_pi.iter().map(|&x| x as u64).collect();
         let state = State {
             t,
-            sa,
+            sa: sa.as_ref(),
             run_boundaries,
             lcp_rmq: rmq::BlockRmq::build(lcp.as_ref()),
             lcp: lcp.as_ref(),

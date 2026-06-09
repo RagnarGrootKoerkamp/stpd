@@ -416,7 +416,7 @@ pub fn stpd(t: &T, _sa: &SA, _lcp: &LCP, perm: &Vec<usize>) -> usize {
     sampled.len()
 }
 
-pub fn stpd_fast(t: &T, sa: &SA, bwt: &T, lcp: &LCP, pi: &Vec<usize>) -> usize {
+pub fn stpd_fast(t: &T, sa: &SA, bwt: &T, lcp: &LCP, pi: &SA) -> usize {
     let jump_index = jump_index::JumpIndex::new2(t, sa, bwt, lcp, pi);
 
     let JumpIndexStats { num_sampled, num_sources, num_source_chars, num_links, cdawg_nodes, cdawg_edges } = jump_index.stats();
@@ -436,19 +436,20 @@ pub fn stpd_fast(t: &T, sa: &SA, bwt: &T, lcp: &LCP, pi: &Vec<usize>) -> usize {
 }
 
 pub fn stpd_pos_minus(t: &T, sa: &SA, bwt: &T, lcp: &LCP) -> usize {
-    let perm = (0..t.len()).collect_vec();
+    // let perm = (0..t.len()).collect_vec();
+    let perm = vec![];
     stpd_fast(t, sa, bwt, lcp, &perm)
 }
 
 pub fn stpd_pos_plus(t: &T, sa: &SA,  bwt: &T,lcp: &LCP) -> usize {
-    let perm = (0..t.len()).rev().collect_vec();
+    let perm = (0..t.len() as SaElem).rev().collect_vec();
     stpd_fast(t, sa, bwt, lcp, &perm)
 }
 
 pub fn stpd_lex_minus(t: &T, sa: &SA,  bwt: &T,lcp: &LCP) -> usize {
     let mut isa = vec![0; t.len()];
     for (i, &x) in sa.iter().enumerate(){
-        isa[x as usize] = i;
+        isa[x as usize] = i as SaElem;
     }
     stpd_fast(t, sa, bwt, lcp, &isa)
 }
@@ -456,7 +457,7 @@ pub fn stpd_lex_minus(t: &T, sa: &SA,  bwt: &T,lcp: &LCP) -> usize {
 pub fn stpd_lex_plus(t: &T, sa: &SA,  bwt: &T,lcp: &LCP) -> usize {
     let mut isa = vec![0; t.len()];
     for (i, &x) in sa.iter().enumerate(){
-        isa[x as usize] = t.len()-1-i;
+        isa[x as usize] = (t.len()-1-i) as SaElem;
     }
     stpd_fast(t, sa, bwt, lcp, &isa)
 }
@@ -465,7 +466,7 @@ pub fn stpd_colex_minus(t: &T, sa: &SA,  bwt: &T,lcp: &LCP) -> usize {
     let co_sa = co_sa(t);
     let mut i_co_sa = vec![0; t.len()];
     for (i, &x) in co_sa.iter().enumerate(){
-        i_co_sa[x as usize] = i;
+        i_co_sa[x as usize] = i as SaElem;
     }
     stpd_fast(t, sa, bwt, lcp, &i_co_sa)
 }
@@ -474,14 +475,14 @@ pub fn stpd_colex_plus(t: &T, sa: &SA,  bwt: &T,lcp: &LCP) -> usize {
     let co_sa = co_sa(t);
     let mut i_co_sa = vec![0; t.len()];
     for (i, &x) in co_sa.iter().enumerate(){
-        i_co_sa[x as usize] = t.len()-1-i;
+        i_co_sa[x as usize] = (t.len()-1-i) as SaElem;
     }
     stpd_fast(t, sa, bwt, lcp, &i_co_sa)
 }
 
 
 pub fn stpd_rand(t: &T, sa: &SA, bwt: &T, lcp: &LCP) -> usize {
-    let mut perm = (0..t.len()).collect_vec();
+    let mut perm = (0..t.len() as SaElem).collect_vec();
     perm.shuffle(&mut rng());
     stpd_fast(t, sa, bwt, lcp, &perm)
 }
