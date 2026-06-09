@@ -2,14 +2,16 @@
 use std::{cmp::{Reverse}, collections::{HashMap, HashSet}};
 use itertools::Itertools;
 use jump_index::JumpIndexStats;
+use lcp::CompactLcp;
 use rand::{rng, seq::SliceRandom};
-use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 pub mod strings;
 pub mod test;
 pub mod stpd;
 pub mod jump_index;
 mod rmq;
+pub mod lcp;
 
 pub type T = Vec<u8>;
 pub type SaElem = u32;
@@ -60,7 +62,7 @@ fn co_sa(t: &T) -> SA {
     co_sa.into_iter().map(|x| t.len() as SaElem - 1 - x ).collect_vec()
 }
 
-pub fn sa_and_lcp(t: &T) -> (SA, LCP) {
+pub fn sa_and_lcp(t: &T) -> (SA, CompactLcp) {
     eprintln!("building sa..");
     let sa_builder = libsais::SuffixArrayConstruction::for_text(t.as_slice())
         .in_owned_buffer64()
@@ -69,7 +71,6 @@ pub fn sa_and_lcp(t: &T) -> (SA, LCP) {
         .unwrap();
     eprintln!("SA:   {:.3} GB", std::mem::size_of_val(sa_builder.suffix_array()) as f32 / 1e9);
 
-    let n = t.len();
     eprintln!("building plcp..");
     let plcp_builder = sa_builder.plcp_construction()
     .multi_threaded(libsais::ThreadCount::openmp_default())
@@ -84,22 +85,18 @@ pub fn sa_and_lcp(t: &T) -> (SA, LCP) {
     let sa = shrink_vec(sa, |x| TryInto::<SaElem>::try_into(x).unwrap());
     eprintln!("SA:   {:.3} GB", std::mem::size_of_val(sa.as_slice()) as f32 / 1e9);
     let plcp = shrink_vec(plcp, |x|  TryInto::<LcpElem>::try_into(x).unwrap());
-    // eprintln!("PLCP: {:.3} GB", std::mem::size_of_val(plcp.as_slice()) as f32 / 1e9);
+    eprintln!("PLCP: {:.3} GB", std::mem::size_of_val(plcp.as_slice()) as f32 / 1e9);
 
-    // Manually convert PLCP to LCP after shrinking allocations.
-    let mut lcp: LCP = (0..n).into_par_iter().map(|i| plcp[sa[i] as usize]).collect();
+    let lcp = CompactLcp::new(plcp);
+    eprintln!("CompactLCP: {:.3} GB", lcp.space() as f32 / 1e9);
 
-    eprintln!("LCP:  {:.3} GB", std::mem::size_of_val(lcp.as_slice()) as f32 / 1e9);
-
+    // // Manually convert PLCP to LCP after shrinking allocations.
+    // let n = t.len();
+    // let mut lcp: LCP = (0..n).into_par_iter().map(|i| plcp[sa[i] as usize]).collect();
+    // eprintln!("LCP:  {:.3} GB", std::mem::size_of_val(lcp.as_slice()) as f32 / 1e9);
     // Drop the sentinel at index 0; the remaining n-1 values correspond to lcp[0..n-1].
-    lcp.remove(0);
-    // Append the circular wrap: LCP(sa[n-1], sa[0]).
-    let (a, b) = (sa[n - 1] as usize, sa[0] as usize);
-    let mut l = 0;
-    while a + l < n && b + l < n && t[a + l] == t[b + l] {
-        l += 1;
-    }
-    lcp.push(l as LcpElem);
+    // lcp.remove(0);
+    // lcp.push(0);
 
     (sa, lcp)
 }
@@ -136,11 +133,11 @@ pub fn delta(t: &T) -> (f32, usize) {
 }
 
 /// Iterate right maximal strings α, corresponding to paths to explicit suffix tree nodes.
-pub fn tree_nodes<'t>(t: &'t T, sa: &SA, lcp: &LCP) -> impl Iterator<Item = &'t [u8]> {
+pub fn tree_nodes<'t>(t: &'t T, sa: &SA, lcp: &CompactLcp) -> impl Iterator<Item = &'t [u8]> {
     gen {
         let mut depths = vec![0];
         for i in 0..t.len() {
-            let l = lcp[i];
+            let l = lcp.get(sa, i);
             while *depths.last().unwrap() > l {
                 let l2 = depths.pop().unwrap();
                 yield &t[sa[i] as usize..sa[i] as usize+l2 as usize];
@@ -154,11 +151,11 @@ pub fn tree_nodes<'t>(t: &'t T, sa: &SA, lcp: &LCP) -> impl Iterator<Item = &'t 
 }
 
 /// Iterate right maximal extensions αX, corresponding to edges going out of explicit suffix tree nodes.
-pub fn tree_edges<'t>(t: &'t T, sa: &SA, lcp: &LCP) -> impl Iterator<Item = &'t [u8]> {
+pub fn tree_edges<'t>(t: &'t T, sa: &SA, lcp: &CompactLcp) -> impl Iterator<Item = &'t [u8]> {
     gen {
         let mut depths = vec![];
         for i in 0..t.len() {
-            let l = lcp[i];
+            let l = lcp.get(sa, i);
             // eprintln!("{i} {l} {} {:?}", sa[i], &t[sa[i]..]);
             while let Some(l2) = depths.last() && *l2 > l {
                 let l2 = depths.pop().unwrap();
@@ -176,7 +173,7 @@ pub fn tree_edges<'t>(t: &'t T, sa: &SA, lcp: &LCP) -> impl Iterator<Item = &'t 
 }
 
 /// Number of leaves in the Weiner-link-tree on explicit suffix tree nodes.
-pub fn w(t: &T, sa: &SA, lcp: &LCP) -> usize {
+pub fn w(t: &T, sa: &SA, lcp: &CompactLcp) -> usize {
     let mut internal = HashSet::new();
     let mut num_nodes = 0;
     for n in tree_nodes(t,sa,lcp) {
@@ -189,7 +186,7 @@ pub fn w(t: &T, sa: &SA, lcp: &LCP) -> usize {
 }
 
 /// Size of smallest suffixient set.
-pub fn chi(t: &T, sa: &SA, lcp: &LCP, print: bool) -> usize {
+pub fn chi(t: &T, sa: &SA, lcp: &CompactLcp, print: bool) -> usize {
     let mut edges = tree_edges(t, sa, lcp).collect_vec();
     edges.sort_by_key(|e| Reverse(e.len()));
 
@@ -214,7 +211,7 @@ pub fn chi(t: &T, sa: &SA, lcp: &LCP, print: bool) -> usize {
 }
 
 // Returns a map alphaX -> alphaX..., where each right-maximal extension is mapped to its node.
-pub fn tree<'t>(t: &'t T, sa: &SA, lcp: &LCP) -> HashMap<&'t [u8], &'t[u8]> {
+pub fn tree<'t>(t: &'t T, sa: &SA, lcp: &CompactLcp) -> HashMap<&'t [u8], &'t[u8]> {
     let mut nodes = HashSet::new();
     for n in tree_nodes(t, sa, lcp) {
         nodes.insert(n);
@@ -232,7 +229,7 @@ pub fn tree<'t>(t: &'t T, sa: &SA, lcp: &LCP) -> HashMap<&'t [u8], &'t[u8]> {
 }
 
 /// Size of smallest suffixient set, with path decomposition.
-pub fn chi_pd(t: &T, sa: &SA, lcp: &LCP) -> usize {
+pub fn chi_pd(t: &T, sa: &SA, lcp: &CompactLcp) -> usize {
     let mut edges = tree_edges(t, sa, lcp).collect_vec();
     edges.sort_by_key(|e| Reverse(e.len()));
 
@@ -277,7 +274,7 @@ pub fn chi_pd(t: &T, sa: &SA, lcp: &LCP) -> usize {
 }
 
 /// Size of smallest suffixient set, with path decomposition.
-pub fn chi_pd2(t: &T, sa: &SA, lcp: &LCP) -> usize {
+pub fn chi_pd2(t: &T, sa: &SA, lcp: &CompactLcp) -> usize {
     let mut edges = tree_edges(t, sa, lcp).collect_vec();
     edges.sort_by_key(|e| Reverse(e.len()));
 
@@ -321,7 +318,7 @@ pub fn chi_pd2(t: &T, sa: &SA, lcp: &LCP) -> usize {
     chi
 }
 
-pub fn stpd(t: &T, _sa: &SA, _lcp: &LCP, perm: &Vec<usize>) -> usize {
+pub fn stpd(t: &T, _sa: &SA, _lcp: &CompactLcp, perm: &Vec<usize>) -> usize {
     let mut iperm = vec![0; t.len()];
     for i in 0..t.len(){
         iperm[perm[i]] = i;
@@ -416,7 +413,7 @@ pub fn stpd(t: &T, _sa: &SA, _lcp: &LCP, perm: &Vec<usize>) -> usize {
     sampled.len()
 }
 
-pub fn stpd_fast(t: &T, sa: &SA, bwt: &T, lcp: &LCP, pi: &SA) -> usize {
+pub fn stpd_fast(t: &T, sa: &SA, bwt: &T, lcp: &CompactLcp, pi: &SA) -> usize {
     let jump_index = jump_index::JumpIndex::new2(t, sa, bwt, lcp, pi);
 
     let JumpIndexStats { num_sampled, num_sources, num_source_chars, num_links, cdawg_nodes, cdawg_edges } = jump_index.stats();
@@ -435,18 +432,18 @@ pub fn stpd_fast(t: &T, sa: &SA, bwt: &T, lcp: &LCP, pi: &SA) -> usize {
     num_sampled
 }
 
-pub fn stpd_pos_minus(t: &T, sa: &SA, bwt: &T, lcp: &LCP) -> usize {
+pub fn stpd_pos_minus(t: &T, sa: &SA, bwt: &T, lcp: &CompactLcp) -> usize {
     // let perm = (0..t.len()).collect_vec();
     let perm = vec![];
     stpd_fast(t, sa, bwt, lcp, &perm)
 }
 
-pub fn stpd_pos_plus(t: &T, sa: &SA,  bwt: &T,lcp: &LCP) -> usize {
+pub fn stpd_pos_plus(t: &T, sa: &SA,  bwt: &T,lcp: &CompactLcp) -> usize {
     let perm = (0..t.len() as SaElem).rev().collect_vec();
     stpd_fast(t, sa, bwt, lcp, &perm)
 }
 
-pub fn stpd_lex_minus(t: &T, sa: &SA,  bwt: &T,lcp: &LCP) -> usize {
+pub fn stpd_lex_minus(t: &T, sa: &SA,  bwt: &T,lcp: &CompactLcp) -> usize {
     let mut isa = vec![0; t.len()];
     for (i, &x) in sa.iter().enumerate(){
         isa[x as usize] = i as SaElem;
@@ -454,7 +451,7 @@ pub fn stpd_lex_minus(t: &T, sa: &SA,  bwt: &T,lcp: &LCP) -> usize {
     stpd_fast(t, sa, bwt, lcp, &isa)
 }
 
-pub fn stpd_lex_plus(t: &T, sa: &SA,  bwt: &T,lcp: &LCP) -> usize {
+pub fn stpd_lex_plus(t: &T, sa: &SA,  bwt: &T,lcp: &CompactLcp) -> usize {
     let mut isa = vec![0; t.len()];
     for (i, &x) in sa.iter().enumerate(){
         isa[x as usize] = (t.len()-1-i) as SaElem;
@@ -462,7 +459,7 @@ pub fn stpd_lex_plus(t: &T, sa: &SA,  bwt: &T,lcp: &LCP) -> usize {
     stpd_fast(t, sa, bwt, lcp, &isa)
 }
 
-pub fn stpd_colex_minus(t: &T, sa: &SA,  bwt: &T,lcp: &LCP) -> usize {
+pub fn stpd_colex_minus(t: &T, sa: &SA,  bwt: &T,lcp: &CompactLcp) -> usize {
     let co_sa = co_sa(t);
     let mut i_co_sa = vec![0; t.len()];
     for (i, &x) in co_sa.iter().enumerate(){
@@ -471,7 +468,7 @@ pub fn stpd_colex_minus(t: &T, sa: &SA,  bwt: &T,lcp: &LCP) -> usize {
     stpd_fast(t, sa, bwt, lcp, &i_co_sa)
 }
 
-pub fn stpd_colex_plus(t: &T, sa: &SA,  bwt: &T,lcp: &LCP) -> usize {
+pub fn stpd_colex_plus(t: &T, sa: &SA,  bwt: &T,lcp: &CompactLcp) -> usize {
     let co_sa = co_sa(t);
     let mut i_co_sa = vec![0; t.len()];
     for (i, &x) in co_sa.iter().enumerate(){
@@ -481,16 +478,16 @@ pub fn stpd_colex_plus(t: &T, sa: &SA,  bwt: &T,lcp: &LCP) -> usize {
 }
 
 
-pub fn stpd_rand(t: &T, sa: &SA, bwt: &T, lcp: &LCP) -> usize {
+pub fn stpd_rand(t: &T, sa: &SA, bwt: &T, lcp: &CompactLcp) -> usize {
     let mut perm = (0..t.len() as SaElem).collect_vec();
     perm.shuffle(&mut rng());
     stpd_fast(t, sa, bwt, lcp, &perm)
 }
 
-pub fn plcp(t: &T, sa: &SA, lcp: &LCP) -> usize {
+pub fn plcp(t: &T, sa: &SA, lcp: &CompactLcp) -> usize {
     let mut plcp = vec![0; t.len()];
     for i in 0..t.len(){
-        plcp[sa[i] as usize] = lcp[i];
+        plcp[sa[i] as usize] = lcp.get(sa, i);
     }
     let mut r = 1;
     for (&x, &y) in plcp.iter().tuple_windows() {
@@ -499,4 +496,14 @@ pub fn plcp(t: &T, sa: &SA, lcp: &LCP) -> usize {
         }
     }
     r
+}
+
+pub fn longest_common_prefix(a: &[u8], b: &[u8]) -> usize {
+    let l = a.len().min(b.len());
+    for i in 0..l {
+        if a[i] != b[i] {
+            return i;
+        }
+    }
+    l
 }

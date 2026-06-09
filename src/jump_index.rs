@@ -6,6 +6,8 @@ use std::{
 
 use crate::{
     bwt,
+    lcp::CompactLcp,
+    longest_common_prefix,
     rmq::{self, Rmq},
     sa_and_lcp,
     stpd::cmp_colex,
@@ -83,24 +85,18 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
         let (sa, lcp) = sa_and_lcp(t.as_ref());
         let bwt = &bwt(t.as_ref(), &sa);
         // let pi = (0..t.as_ref().len()).collect_vec();
-        Self::new2(t, sa, bwt, lcp, &vec![])
+        Self::new2(t, sa, bwt, &lcp, &vec![])
     }
 }
 impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
-    pub fn new2<SAR: AsRef<SA> + Sync, LCPR: AsRef<LCP> + Sync>(
-        t: TR,
-        sa: SAR,
-        bwt: &T,
-        lcp: LCPR,
-        pi: &SA,
-    ) -> Self {
+    pub fn new2<SAR: AsRef<SA> + Sync>(t: TR, sa: SAR, bwt: &T, lcp: &CompactLcp, pi: &SA) -> Self {
         const PARALLEL_THRESHOLD: usize = 10_000_000;
 
         struct State<'a, T, SA> {
             t: T,
             bwt: &'a Vec<u8>,
             sa: &'a SA,
-            lcp: &'a LCP,
+            lcp: &'a CompactLcp,
             // run_boundaries: Vec<SaElem>,
             lcp_rmq: rmq::BlockRmq<crate::LcpElem, 128>,
             permuted_pi: &'a SA,
@@ -131,16 +127,27 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
 
                 let anchor_idx = self
                     .pi_rmq
-                    .query(self.permuted_pi.as_ref(), interval.start, interval.end - 1)
+                    .query(
+                        self.permuted_pi.as_ref().as_slice(),
+                        interval.start,
+                        interval.end - 1,
+                    )
                     .1;
                 // let _anchor_pos = self.sa.as_ref()[anchor_idx];
                 // eprintln!("anchor pos: {anchor_pos}");
                 let mut done_intervals = vec![];
                 let mut wip_intervals = vec![interval.clone()];
-                let lcp = self.lcp[self
-                    .lcp_rmq
-                    .query(&self.lcp, interval.start, interval.end - 2)
-                    .1];
+                // FIXME: Keep track of LCP so far in DFS on suffix tree.
+                let lcp = longest_common_prefix(
+                    &self.t.as_ref()[self.sa.as_ref()[interval.start] as usize..],
+                    &self.t.as_ref()[self.sa.as_ref()[interval.end - 1] as usize..],
+                );
+                // let lcp = self.lcp.get(
+                //     self.sa.as_ref(),
+                //     self.lcp_rmq
+                //         .query(&self.lcp, interval.start, interval.end - 2)
+                //         .1,
+                // );
                 // eprintln!(
                 //     "node for {}",
                 //     crate::print(&self.t.as_ref()[anchor_pos..anchor_pos + lcp as usize])
@@ -151,12 +158,22 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                         done_intervals.push(interval);
                         continue;
                     }
+
                     let split_pos = self
                         .lcp_rmq
-                        .query(&self.lcp, interval.start, interval.end - 2)
+                        .query(
+                            (self.sa.as_ref(), self.lcp),
+                            interval.start,
+                            interval.end - 2,
+                        )
                         .1
                         + 1;
-                    let new_lcp = self.lcp[split_pos - 1];
+                    // FIXME: Keep track of LCP so far in DFS on suffix tree.
+                    let new_lcp = longest_common_prefix(
+                        &self.t.as_ref()[self.sa.as_ref()[split_pos - 1] as usize..],
+                        &self.t.as_ref()[self.sa.as_ref()[split_pos] as usize..],
+                    );
+                    // let new_lcp = self.lcp.get(self.sa.as_ref(), split_pos - 1);
                     if new_lcp > lcp {
                         done_intervals.push(interval);
                         continue;
@@ -180,7 +197,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                     if !x.contains(&anchor_pos) {
                         let secondary_anchor_pos = self
                             .pi_rmq
-                            .query(self.permuted_pi.as_ref(), x.start, x.end - 1)
+                            .query(self.permuted_pi.as_ref().as_slice(), x.start, x.end - 1)
                             .1;
                         let text_idx = self.sa.as_ref()[secondary_anchor_pos] as usize;
                         let target = text_idx + lcp as usize;
@@ -284,9 +301,9 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
         // eprintln!("run boundaries: {:?}", run_boundaries);
 
         use rmq::Rmq as _;
-        let lcp_rmq = rmq::BlockRmq::build(lcp.as_ref());
+        let lcp_rmq = rmq::BlockRmq::build((sa.as_ref(), lcp));
         eprintln!("lcp rmq: {:.3} GB", lcp_rmq.space() as f32 / 1e9);
-        let pi_rmq = rmq::BlockRmq::build(&permuted_pi);
+        let pi_rmq = rmq::BlockRmq::build(permuted_pi.as_slice());
         eprintln!("pi  rmq: {:.3} GB", pi_rmq.space() as f32 / 1e9);
         let state = State {
             t,
@@ -294,7 +311,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
             sa: sa.as_ref(),
             // run_boundaries,
             lcp_rmq,
-            lcp: lcp.as_ref(),
+            lcp,
             pi_rmq,
             permuted_pi: &permuted_pi,
         };
@@ -375,7 +392,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
         JumpIndex {
             t,
             stpd_samples,
-            stpd_rmq: rmq::BlockRmq::build(&stpd_pi),
+            stpd_rmq: rmq::BlockRmq::build(stpd_pi.as_slice()),
             stpd_pi,
             links,
             cdawg_nodes,
@@ -496,7 +513,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                 // eprintln!("idx: {idx1}..{idx2}");
                 return None;
             }
-            let (_val, idx) = self.stpd_rmq.query(&self.stpd_pi, idx1, idx2 - 1);
+            let (_val, idx) = self.stpd_rmq.query(self.stpd_pi.as_slice(), idx1, idx2 - 1);
             // eprintln!("idx: {idx1}..{idx2} => {idx} val={_val}");
             pos = self.stpd_samples[idx] + 1;
 
