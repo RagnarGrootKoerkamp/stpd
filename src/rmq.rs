@@ -23,7 +23,7 @@ pub trait Rmq {
 /// - Same block: linear scan.
 /// - Across blocks: suffix scan of first block, sparse table on interior blocks, prefix scan of last block.
 pub struct BlockRmq<const S: usize> {
-    block_min_pos: Vec<usize>,
+    block_min_pos: Vec<u8>,
     sparse: SparseTable,
 }
 impl<const S: usize> Rmq for BlockRmq<S> {
@@ -31,12 +31,16 @@ impl<const S: usize> Rmq for BlockRmq<S> {
         format!("BlockRmq<{S}>")
     }
     fn build(data: &[u64]) -> Self {
+        assert!(
+            S <= 256,
+            "Block size S must fit in u8 for position encoding"
+        );
         let n = data.len();
-        let (block_mins, block_min_pos): (Vec<u64>, Vec<usize>) = (0..(n + S - 1) / S)
+        let (block_mins, block_min_pos): (Vec<u64>, Vec<u8>) = (0..(n + S - 1) / S)
             .into_par_iter()
             .map(|b| {
                 (b * S..(b * S + S).min(n))
-                    .map(|i| (data[i], i))
+                    .map(|i| (data[i], (i - b * S) as u8))
                     .min()
                     .unwrap()
             })
@@ -60,7 +64,7 @@ impl<const S: usize> Rmq for BlockRmq<S> {
         let mid = if block_r > block_l + 1 {
             let (val, block_idx) = self.sparse.query(data, block_l + 1, block_r - 1);
             let idx = self.block_min_pos[block_idx];
-            (val, idx)
+            (val, block_idx * S + idx as usize)
         } else {
             (u64::MAX, usize::MAX)
         };
