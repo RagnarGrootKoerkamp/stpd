@@ -431,7 +431,7 @@ checksum = "e6361d5c062261c78a176addb82d4c821ae42bed6089de0e12603cd25de2059c"
 dependencies = [
  "cfg-if",
  "crossbeam-utils",
- "hashbrown",
+ "hashbrown 0.14.5",
  "lock_api",
  "once_cell",
  "parking_lot_core",
@@ -477,6 +477,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "equivalent"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -491,6 +497,12 @@ dependencies = [
  "crc32fast",
  "miniz_oxide",
 ]
+
+[[package]]
+name = "foldhash"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "futures-core"
@@ -557,6 +569,17 @@ checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
 dependencies = [
  "ahash",
  "allocator-api2",
+]
+
+[[package]]
+name = "hashbrown"
+version = "0.16.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
+dependencies = [
+ "allocator-api2",
+ "equivalent",
+ "foldhash",
 ]
 
 [[package]]
@@ -721,7 +744,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "728cc9dc97593cd22f7bc81fbef70a2d391d7a9a855e7d658b653318124a6cf0"
 dependencies = [
  "bitflags",
- "mem_dbg-derive",
+ "mem_dbg-derive 0.2.1",
+]
+
+[[package]]
+name = "mem_dbg"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53b7e410fe9eee1406f61ee968dc333175047b7d029fc0776ec309c29dd7059b"
+dependencies = [
+ "bitflags",
+ "hashbrown 0.16.1",
+ "mem_dbg-derive 0.3.2",
 ]
 
 [[package]]
@@ -729,6 +763,17 @@ name = "mem_dbg-derive"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d84f40c93b0508d5565db79a814d02d5b2545967205ce44be211592aafa34d6c"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "mem_dbg-derive"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f110f5c815866d5a4a56efe163a7d8b8ee2749f295efae3b3adb84e6c1a617fb"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -825,7 +870,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a308691a5bd3c1a4614c199859a9d0111002fa49df98a2bc3278d5e2da535f6"
 dependencies = [
  "cfg-if",
- "mem_dbg",
+ "mem_dbg 0.3.4",
  "rand",
  "wide",
 ]
@@ -947,7 +992,7 @@ dependencies = [
  "anyhow",
  "bincode",
  "byteorder",
- "hashbrown",
+ "hashbrown 0.14.5",
  "serde",
  "thiserror",
  "zstd",
@@ -967,7 +1012,7 @@ dependencies = [
  "crossbeam",
  "dashmap",
  "flate2",
- "hashbrown",
+ "hashbrown 0.14.5",
  "num_cpus",
  "ragc-common",
  "rayon",
@@ -1220,6 +1265,7 @@ dependencies = [
  "itertools 0.14.0",
  "libsais",
  "log",
+ "mem_dbg 0.4.2",
  "needletail",
  "packed-seq",
  "ragc-core",

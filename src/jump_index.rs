@@ -1,4 +1,5 @@
 use itertools::Itertools;
+use mem_dbg::SizeFlags;
 use std::{
     cmp::Ordering::{Greater, Less},
     collections::BTreeSet,
@@ -246,10 +247,20 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
             .filter(|(i, j)| bwt[*i] != bwt[*j])
             .map(|(i, _j)| i)
             .collect_vec();
+        eprintln!(
+            "Run boundaries: {}B",
+            std::mem::size_of_val(run_boundaries.as_slice())
+        );
         let run_boundaries = BTreeSet::from_iter(run_boundaries);
+        let s = mem_dbg::MemSize::mem_size(&run_boundaries, SizeFlags::default());
+        eprintln!("Run boundaries set: {}B", s);
 
         // empty indicates pi=identity and permuted_pi = sa.
-        let permuted_pi: SA = sa.as_ref().par_iter().map(|&i| pi[i as usize]).collect();
+        let permuted_pi: SA = if pi.is_empty() {
+            vec![]
+        } else {
+            sa.as_ref().par_iter().map(|&i| pi[i as usize]).collect()
+        };
 
         // eprintln!();
         // eprintln!("sa:  {:?}", sa.as_ref());
