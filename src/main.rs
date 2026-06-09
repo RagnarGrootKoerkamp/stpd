@@ -202,6 +202,33 @@ fn pizzachili(filter: Option<&str>) -> Vec<(String, T)> {
         .collect()
 }
 
+fn ragc() -> Vec<(String, T)> {
+    let path = "/home/philae/git/eth/data/hprcv2.agc";
+    use ragc_core::{Decompressor, DecompressorConfig};
+
+    // Open an archive
+    let config = DecompressorConfig::default();
+    let mut decompressor = Decompressor::open(path, config).unwrap();
+
+    // List available samples
+    let samples = decompressor.list_samples();
+    println!("Found {} samples", samples.len());
+    eprintln!("samples: {samples:?}");
+
+    // Extract a sample
+    let sample = &samples[1];
+    let contigs = decompressor.list_contigs(sample).unwrap();
+    eprintln!("contigs {contigs:?}");
+    for contig in &contigs {
+        let contig = decompressor.get_contig(sample, contig).unwrap();
+    }
+    // for (name, sequence) in contigs {
+    //     println!(">{}", name);
+    //     // sequence is Vec<u8> with numeric encoding (A=0, C=1, G=2, T=3)
+    // }
+    panic!();
+}
+
 fn main() {
     env_logger::Builder::from_default_env()
         .format_timestamp_micros()
@@ -222,10 +249,11 @@ fn main() {
     header();
     let repeated = relative(200, 4, 20, 0.05);
     let texts = [
+        // ragc(),
+        pizzachili(dataset.as_deref()),
         // vec![
         //     ("manual".to_string(), b"AGAGCGAGAGCGCGC#".to_vec()),
         // ],
-        pizzachili(dataset.as_deref()),
         // variants(fib(15)),
         vec![
             // relative(100, 4, 200, 0.01),

@@ -14,6 +14,7 @@ libsais = "0.2.0"
 log = "0.4.29"
 needletail = "0.6.3"
 packed-seq = "3.2.1"
+ragc-core = "0.1.1"
 rand = "0.9.1"
 rayon = "1.12.0"
 rmq-rust = { version = "0.1.0", path = "../rmq-project/rmq-rust" }
