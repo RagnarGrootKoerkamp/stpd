@@ -77,6 +77,14 @@ fn stats((name, t): &(String, T), print: bool) {
     let bwt = &bwt(t, sa);
     // eprintln!("t:   {}", crate::print(t));
     // eprintln!("bwt: {}", crate::print(bwt));
+    eprintln!(
+        "t:   {:.3} GB",
+        std::mem::size_of_val(t.as_slice()) as f32 / 1_000_000_000.
+    );
+    eprintln!(
+        "bwt: {:.3} GB",
+        std::mem::size_of_val(bwt.as_slice()) as f32 / 1_000_000_000.
+    );
     let r = r(bwt);
 
     // // slow

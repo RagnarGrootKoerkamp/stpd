@@ -1,8 +1,6 @@
 use itertools::Itertools;
-use mem_dbg::SizeFlags;
 use std::{
     cmp::Ordering::{Greater, Less},
-    collections::BTreeSet,
     marker::Sync,
 };
 
@@ -71,13 +69,14 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
         lcp: LCPR,
         pi: &SA,
     ) -> Self {
-        const PARALLEL_THRESHOLD: usize = 100_000;
+        const PARALLEL_THRESHOLD: usize = 10_000_000;
 
         struct State<'a, T, SA> {
             t: T,
+            bwt: &'a Vec<u8>,
             sa: &'a SA,
             lcp: &'a LCP,
-            run_boundaries: Vec<SaElem>,
+            // run_boundaries: Vec<SaElem>,
             lcp_rmq: rmq::BlockRmq<crate::LcpElem, 128>,
             permuted_pi: &'a SA,
             pi_rmq: rmq::BlockRmq<SaElem, 128>,
@@ -91,12 +90,16 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                 if interval.len() <= 1 {
                     return None;
                 }
-                let idx = self
-                    .run_boundaries
-                    .binary_search(&(interval.start as SaElem))
-                    .unwrap_or_else(|x| x);
-                let single_run = idx == self.run_boundaries.len()
-                    || self.run_boundaries[idx] >= interval.end as SaElem - 1;
+                // let idx = self
+                //     .run_boundaries
+                //     .binary_search(&(interval.start as SaElem))
+                //     .unwrap_or_else(|x| x);
+                // let single_run = idx == self.run_boundaries.len()
+                //     || self.run_boundaries[idx] >= interval.end as SaElem - 1;
+                // FIXME: Is this too slow? Use EF on run boundaries instead?
+                let single_run = self.bwt[interval.clone()]
+                    .iter()
+                    .all(|&c| c == self.bwt[interval.start]);
                 if single_run {
                     return None;
                 }
@@ -228,15 +231,15 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
             }
         }
 
-        let run_boundaries = (0..t.as_ref().len())
-            .tuple_windows()
-            .filter(|(i, j)| bwt[*i] != bwt[*j])
-            .map(|(i, _j)| i as SaElem)
-            .collect_vec();
-        eprintln!(
-            "Run boundaries: {:.3} GB",
-            std::mem::size_of_val(run_boundaries.as_slice()) as f32 / 1e9
-        );
+        // let run_boundaries: Vec<SaElem> = (0..t.as_ref().len() - 1)
+        //     .into_par_iter()
+        //     .filter(|&i| bwt[i] != bwt[i + 1])
+        //     .map(|i| i as SaElem)
+        //     .collect();
+        // eprintln!(
+        //     "Run boundaries: {:.3} GB",
+        //     std::mem::size_of_val(run_boundaries.as_slice()) as f32 / 1e9
+        // );
         // let run_boundaries = BTreeSet::from_iter(run_boundaries);
         // let s = mem_dbg::MemSize::mem_size(&run_boundaries, SizeFlags::default());
         // eprintln!("Run boundaries set: {:.3} GB", s as f32 / 1e9);
@@ -245,6 +248,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
         let permuted_pi: &SA = if pi.is_empty() {
             &sa.as_ref()
         } else {
+            eprintln!("permuting pi..");
             &sa.as_ref().par_iter().map(|&i| pi[i as usize]).collect()
         };
 
@@ -258,8 +262,8 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
         let state = State {
             t,
             sa: sa.as_ref(),
-            run_boundaries,
             lcp_rmq: rmq::BlockRmq::build(lcp.as_ref()),
+            // run_boundaries,
             lcp: lcp.as_ref(),
             pi_rmq: rmq::BlockRmq::build(&permuted_pi),
             permuted_pi: &permuted_pi,
@@ -270,6 +274,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
         let mut work_queue = vec![];
         let mut cdawg_nodes = 1; // the final node
         let mut cdawg_edges = 0;
+        eprintln!("collecting work..");
         state.collect_work(
             0..state.t.as_ref().len(),
             &mut stpd_samples,
@@ -279,6 +284,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
             &mut cdawg_edges,
         );
 
+        eprintln!("Ron on {} intervals!", work_queue.len());
         use rayon::prelude::*;
         let child_results: Vec<(Vec<usize>, Vec<Link>, usize, usize)> = work_queue
             .into_par_iter()
@@ -293,6 +299,11 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                     &mut links,
                     &mut cdawg_nodes,
                     &mut cdawg_edges,
+                );
+                eprintln!(
+                    "Collected {} links, size {:.3} GB",
+                    links.len(),
+                    std::mem::size_of_val(links.as_slice()) as f32 / 1e9
                 );
                 (sampled, links, cdawg_nodes, cdawg_edges)
             })
