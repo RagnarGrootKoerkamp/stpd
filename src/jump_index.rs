@@ -259,13 +259,18 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
         // eprintln!("run boundaries: {:?}", run_boundaries);
 
         use rmq::Rmq as _;
+        let lcp_rmq = rmq::BlockRmq::build(lcp.as_ref());
+        eprintln!("lcp rmq: {:.3} GB", lcp_rmq.space() as f32 / 1e9);
+        let pi_rmq = rmq::BlockRmq::build(&permuted_pi);
+        eprintln!("pi rmq: {:.3} GB", pi_rmq.space() as f32 / 1e9);
         let state = State {
             t,
+            bwt,
             sa: sa.as_ref(),
-            lcp_rmq: rmq::BlockRmq::build(lcp.as_ref()),
             // run_boundaries,
+            lcp_rmq,
             lcp: lcp.as_ref(),
-            pi_rmq: rmq::BlockRmq::build(&permuted_pi),
+            pi_rmq,
             permuted_pi: &permuted_pi,
         };
 

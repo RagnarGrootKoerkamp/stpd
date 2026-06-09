@@ -164,12 +164,14 @@ impl<T: RmqElem, const S: usize> Rmq<T> for BlockRmqPrecomputed<T, S> {
     }
 }
 
+type I = SaElem;
+
 /// Sparse table: O(n log n) space, O(1) query.
 ///
 /// `table[k][i]` = minimum of `data[i .. i + 2^k]`.
 /// Query [l, r]: let k = floor(log2(r - l + 1)), return min(table[k][l], table[k][r - 2^k + 1]).
 struct SparseTable<T: RmqElem> {
-    table: Vec<Vec<(T, usize)>>,
+    table: Vec<Vec<(T, I)>>,
 }
 impl<T: RmqElem> Rmq<T> for SparseTable<T> {
     fn name() -> String {
@@ -183,8 +185,8 @@ impl<T: RmqElem> Rmq<T> for SparseTable<T> {
             usize::BITS as usize - n.leading_zeros() as usize
         };
 
-        let mut table: Vec<Vec<(T, usize)>> = Vec::with_capacity(levels);
-        table.push(data.iter().enumerate().map(|(i, x)| (*x, i)).collect());
+        let mut table: Vec<Vec<(T, I)>> = Vec::with_capacity(levels);
+        table.push(data.iter().enumerate().map(|(i, x)| (*x, i as I)).collect());
         for k in 1..levels {
             let half = 1 << (k - 1);
             let prev = &table[k - 1];
@@ -204,6 +206,7 @@ impl<T: RmqElem> Rmq<T> for SparseTable<T> {
     }
     fn query(&self, _data: &[T], l: usize, r: usize) -> (T, usize) {
         let k = usize::BITS as usize - (r - l + 1).leading_zeros() as usize - 1;
-        self.table[k][l].min(self.table[k][r - (1 << k) + 1])
+        let (x, idx) = self.table[k][l].min(self.table[k][r - (1 << k) + 1]);
+        (x, idx as usize)
     }
 }

@@ -18,7 +18,6 @@ packed-seq = "3.2.1"
 ragc-core = "0.1.1"
 rand = "0.9.1"
 rayon = "1.12.0"
-rmq-rust = { version = "0.1.0", path = "../rmq-project/rmq-rust" }
 simd-minimizers = "1.1.0"
 tiered-vector = "1.0.1"
 voracious_radix_sort = { version = "1.2.0", features = ["voracious_multithread"] }
