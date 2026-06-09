@@ -14,15 +14,40 @@ use crate::{
 
 #[derive(Copy, Clone, PartialEq, PartialOrd, Eq, Ord, Debug)]
 pub struct Link {
-    pub source: usize,
-    pub c: char,
-    pub lcp: usize,
-    pub target: usize,
+    data: u128,
+    // 6 bytes
+    // source: usize,
+    // 1 byte
+    // c: u8,
+    // 3 bytes
+    // lcp: usize,
+    // 6 bytes
+    // target: usize,
 }
 
 impl Link {
+    fn new(source: usize, c: u8, lcp: usize, target: usize) -> Self {
+        Self {
+            data: ((source as u128) << 80)
+                | ((c as u128) << 72)
+                | ((lcp as u128) << 48)
+                | (target as u128),
+        }
+    }
     fn key(&self) -> u128 {
-        ((self.source as u128) << 64) | ((self.c as u128) << 48) | (self.lcp as u128)
+        self.data
+    }
+    fn source(&self) -> usize {
+        (self.data >> 80) as usize
+    }
+    fn source_c(&self) -> usize {
+        (self.data >> 72) as usize
+    }
+    fn c(&self) -> u8 {
+        (self.data >> 72) as u8
+    }
+    fn target(&self) -> usize {
+        (self.data & ((1 << 48) - 1)) as usize
     }
 }
 
@@ -164,12 +189,12 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                             // sampled.push(target);
                             let source = self.sa.as_ref()[anchor_pos] as usize + lcp as usize;
                             let c = self.t.as_ref()[target];
-                            links.push(Link {
+                            links.push(Link::new(
                                 source,
-                                c: c as char,
-                                lcp: co_lcp(&self.t.as_ref()[..source], &self.t.as_ref()[..target]),
+                                c,
+                                co_lcp(&self.t.as_ref()[..source], &self.t.as_ref()[..target]),
                                 target,
-                            });
+                            ));
                         }
                     }
                 }
@@ -262,7 +287,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
         let lcp_rmq = rmq::BlockRmq::build(lcp.as_ref());
         eprintln!("lcp rmq: {:.3} GB", lcp_rmq.space() as f32 / 1e9);
         let pi_rmq = rmq::BlockRmq::build(&permuted_pi);
-        eprintln!("pi rmq: {:.3} GB", pi_rmq.space() as f32 / 1e9);
+        eprintln!("pi  rmq: {:.3} GB", pi_rmq.space() as f32 / 1e9);
         let state = State {
             t,
             bwt,
@@ -289,7 +314,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
             &mut cdawg_edges,
         );
 
-        eprintln!("Ron on {} intervals!", work_queue.len());
+        eprintln!("Run on {} intervals!", work_queue.len());
         use rayon::prelude::*;
         let child_results: Vec<(Vec<usize>, Vec<Link>, usize, usize)> = work_queue
             .into_par_iter()
@@ -370,13 +395,13 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                 .links
                 .iter()
                 .tuple_windows()
-                .filter(|(a, b)| a.source != b.source)
+                .filter(|(a, b)| a.source() != b.source())
                 .count(),
             num_source_chars: 1 + self
                 .links
                 .iter()
                 .tuple_windows()
-                .filter(|(a, b)| (a.source, a.c) != (b.source, b.c))
+                .filter(|(a, b)| a.source_c() != b.source_c())
                 .count(),
             num_links: 1 + self
                 .links
@@ -492,22 +517,12 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
 
             let link_idx = self
                 .links
-                .binary_search_by(|link| {
-                    link.key().cmp(
-                        &Link {
-                            source: pos,
-                            c: c as char,
-                            lcp: i,
-                            target: 0,
-                        }
-                        .key(),
-                    )
-                })
+                .binary_search_by(|link| link.key().cmp(&Link::new(pos, c, i, 0).key()))
                 .map_or_else(|e| e, |v| v);
             let link = self.links[link_idx];
             // eprintln!("pos {pos} link {link:?}");
-            if link.source == pos && link.c as u8 == c {
-                pos = link.target + 1;
+            if link.source() == pos && link.c() as u8 == c {
+                pos = link.target() + 1;
             } else {
                 return None;
             }

@@ -84,7 +84,7 @@ pub fn sa_and_lcp(t: &T) -> (SA, LCP) {
     let sa = shrink_vec(sa, |x| TryInto::<SaElem>::try_into(x).unwrap());
     eprintln!("SA:   {:.3} GB", std::mem::size_of_val(sa.as_slice()) as f32 / 1e9);
     let plcp = shrink_vec(plcp, |x|  TryInto::<LcpElem>::try_into(x).unwrap());
-    eprintln!("PLCP: {:.3} GB", std::mem::size_of_val(plcp.as_slice()) as f32 / 1e9);
+    // eprintln!("PLCP: {:.3} GB", std::mem::size_of_val(plcp.as_slice()) as f32 / 1e9);
 
     // Manually convert PLCP to LCP after shrinking allocations.
     let mut lcp: LCP = (0..n).into_par_iter().map(|i| plcp[sa[i] as usize]).collect();
