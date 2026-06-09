@@ -38,7 +38,7 @@ pub struct JumpIndex<TR: AsRef<T>> {
     pub t: TR,
     pub stpd_samples: Vec<usize>,
     pub stpd_pi: Vec<u64>,
-    pub stpd_rmq: rmq::BlockRmq<64>,
+    pub stpd_rmq: rmq::BlockRmq<u64, 64>,
     // TODO: Predecessor structure
     pub links: Vec<Link>,
     pub cdawg_nodes: usize,
@@ -77,10 +77,10 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
             sa: SA,
             lcp: &'a LCP,
             run_boundaries: BTreeSet<usize>,
-            lcp_rmq: rmq::BlockRmq<128>,
+            lcp_rmq: rmq::BlockRmq<crate::LcpElem, 128>,
             #[allow(unused)]
             permuted_pi: &'a Vec<u64>,
-            pi_rmq: rmq::BlockRmq<128>,
+            pi_rmq: rmq::BlockRmq<u64, 128>,
         }
 
         impl<'a, TR: AsRef<T>, SAR: AsRef<SA>> State<'a, TR, SAR> {

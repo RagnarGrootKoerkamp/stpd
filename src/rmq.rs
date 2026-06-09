@@ -1,9 +1,27 @@
 #![allow(unused)]
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
-type T = crate::LcpElem;
+pub trait RmqElem: Copy + Ord + std::fmt::Debug + Send + Sync {
+    const MAX: Self;
+}
 
-pub trait Rmq {
+impl RmqElem for u16 {
+    const MAX: Self = u16::MAX;
+}
+
+impl RmqElem for u32 {
+    const MAX: Self = u32::MAX;
+}
+
+impl RmqElem for u64 {
+    const MAX: Self = u64::MAX;
+}
+
+impl RmqElem for usize {
+    const MAX: Self = usize::MAX;
+}
+
+pub trait Rmq<T: RmqElem> {
     fn name() -> String;
     /// To save time, only run benchmarks up to this n.
     fn max_n() -> usize {
@@ -24,11 +42,11 @@ pub trait Rmq {
 /// For query [l, r]:
 /// - Same block: linear scan.
 /// - Across blocks: suffix scan of first block, sparse table on interior blocks, prefix scan of last block.
-pub struct BlockRmq<const S: usize> {
+pub struct BlockRmq<T: RmqElem, const S: usize> {
     block_min_pos: Vec<u8>,
-    sparse: SparseTable,
+    sparse: SparseTable<T>,
 }
-impl<const S: usize> Rmq for BlockRmq<S> {
+impl<T: RmqElem, const S: usize> Rmq<T> for BlockRmq<T, S> {
     fn name() -> String {
         format!("BlockRmq<{S}>")
     }
@@ -79,21 +97,21 @@ impl<const S: usize> Rmq for BlockRmq<S> {
 ///
 /// `prefix_min[i]` = min(data[block_start ..= i])
 /// `suffix_min[i]` = min(data[i ..= block_end])
-pub struct BlockRmqPrecomputed<const S: usize> {
+pub struct BlockRmqPrecomputed<T: RmqElem, const S: usize> {
     prefix_min: Vec<(T, usize)>,
     suffix_min: Vec<(T, usize)>,
     block_min_pos: Vec<usize>,
-    sparse: SparseTable,
+    sparse: SparseTable<T>,
 }
-impl<const S: usize> Rmq for BlockRmqPrecomputed<S> {
+impl<T: RmqElem, const S: usize> Rmq<T> for BlockRmqPrecomputed<T, S> {
     fn name() -> String {
         format!("BlockPSRmq<{S}>")
     }
     fn build(data: &[T]) -> Self {
         let n = data.len();
         let num_blocks = (n + S - 1) / S;
-        let mut prefix_min = vec![(0 as T, 0); n];
-        let mut suffix_min = vec![(0 as T, 0); n];
+        let mut prefix_min = vec![(T::MAX, 0); n];
+        let mut suffix_min = vec![(T::MAX, 0); n];
 
         for b in 0..num_blocks {
             let lo = b * S;
@@ -150,10 +168,10 @@ impl<const S: usize> Rmq for BlockRmqPrecomputed<S> {
 ///
 /// `table[k][i]` = minimum of `data[i .. i + 2^k]`.
 /// Query [l, r]: let k = floor(log2(r - l + 1)), return min(table[k][l], table[k][r - 2^k + 1]).
-struct SparseTable {
+struct SparseTable<T: RmqElem> {
     table: Vec<Vec<(T, usize)>>,
 }
-impl Rmq for SparseTable {
+impl<T: RmqElem> Rmq<T> for SparseTable<T> {
     fn name() -> String {
         "SparseTable".to_string()
     }
