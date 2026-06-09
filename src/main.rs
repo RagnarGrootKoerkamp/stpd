@@ -180,7 +180,11 @@ fn pizzachili(filter: Option<&str>) -> Vec<(String, T)> {
     let mut entries: Vec<_> = std::fs::read_dir(dir)
         .expect("failed to read pizzachili dir")
         .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
+        .filter(|e| {
+            e.file_type()
+                .map(|t| t.is_file() || t.is_symlink())
+                .unwrap_or(false)
+        })
         .filter(|e| {
             filter
                 .map(|f| e.file_name().to_string_lossy() == f)
