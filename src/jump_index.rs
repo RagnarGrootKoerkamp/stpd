@@ -2,6 +2,7 @@ use itertools::Itertools;
 use std::{
     cmp::Ordering::{Greater, Less},
     marker::Sync,
+    ops::Range,
 };
 use sux::{bits::BitVec, dict::EliasFano, rank_sel::SelectZeroAdaptConst, traits::Succ};
 use voracious_radix_sort::RadixSort;
@@ -9,20 +10,30 @@ use voracious_radix_sort::RadixSort;
 use crate::{
     bwt,
     lcp::CompactLcp,
-    longest_common_prefix,
     rmq::{self, Rmq},
     sa_and_lcp_cached,
     stpd::cmp_colex,
-    SaElem, SA, T,
+    SA, T,
 };
 
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 pub struct Link {
     data: u128,
     // source: usize,
     // c: u8,
     // lcp: usize,
     // target: usize,
+}
+
+impl std::fmt::Debug for Link {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Link")
+            .field("source", &self.source())
+            .field("c", &self.c())
+            .field("lcp", &self.lcp())
+            .field("target", &self.target())
+            .finish()
+    }
 }
 
 const SOURCE_BITS: u32 = 31;
@@ -122,206 +133,12 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
 }
 impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
     pub fn new2<SAR: AsRef<SA> + Sync>(t: TR, sa: SAR, bwt: &T, lcp: &CompactLcp, pi: &SA) -> Self {
-        struct State<'a, T, SA> {
-            t: T,
-            bwt: &'a Vec<u8>,
-            sa: &'a SA,
-            lcp: &'a CompactLcp,
-            // run_boundaries: Vec<SaElem>,
-            lcp_rmq: rmq::BlockRmq<crate::LcpElem, 16>,
-            permuted_pi: &'a SA,
-            pi_rmq: rmq::BlockRmq<SaElem, 64>,
-        }
-
-        impl<'a, TR: AsRef<T>, SAR: AsRef<SA>> State<'a, TR, SAR> {
-            fn split(
-                &self,
-                interval: std::ops::Range<usize>,
-            ) -> Option<(bool, usize, usize, Vec<std::ops::Range<usize>>)> {
-                if interval.len() <= 1 {
-                    return None;
-                }
-                // let idx = self
-                //     .run_boundaries
-                //     .binary_search(&(interval.start as SaElem))
-                //     .unwrap_or_else(|x| x);
-                // let single_run = idx == self.run_boundaries.len()
-                //     || self.run_boundaries[idx] >= interval.end as SaElem - 1;
-                // FIXME: Is this too slow? Use EF on run boundaries instead?
-                let single_run = self.bwt[interval.clone()]
-                    .iter()
-                    .all(|&c| c == self.bwt[interval.start]);
-                if single_run {
-                    return None;
-                }
-
-                let anchor_idx = self
-                    .pi_rmq
-                    .query(
-                        self.permuted_pi.as_ref().as_slice(),
-                        interval.start,
-                        interval.end - 1,
-                    )
-                    .1;
-                // let _anchor_pos = self.sa.as_ref()[anchor_idx];
-                // eprintln!("anchor pos: {anchor_pos}");
-                let mut done_intervals = vec![];
-                let mut wip_intervals = vec![interval.clone()];
-                // FIXME: Keep track of LCP so far in DFS on suffix tree.
-                let lcp = longest_common_prefix(
-                    &self.t.as_ref()[self.sa.as_ref()[interval.start] as usize..],
-                    &self.t.as_ref()[self.sa.as_ref()[interval.end - 1] as usize..],
-                );
-                // let lcp = self.lcp.get(
-                //     self.sa.as_ref(),
-                //     self.lcp_rmq
-                //         .query(&self.lcp, interval.start, interval.end - 2)
-                //         .1,
-                // );
-                // eprintln!(
-                //     "node for {}",
-                //     crate::print(&self.t.as_ref()[anchor_pos..anchor_pos + lcp as usize])
-                // );
-
-                while let Some(interval) = wip_intervals.try_remove(0) {
-                    if interval.len() <= 1 {
-                        done_intervals.push(interval);
-                        continue;
-                    }
-
-                    let split_pos = self
-                        .lcp_rmq
-                        .query(
-                            (self.sa.as_ref(), self.lcp),
-                            interval.start,
-                            interval.end - 2,
-                        )
-                        .1
-                        + 1;
-                    // FIXME: Keep track of LCP so far in DFS on suffix tree.
-                    let new_lcp = longest_common_prefix(
-                        &self.t.as_ref()[self.sa.as_ref()[split_pos - 1] as usize..],
-                        &self.t.as_ref()[self.sa.as_ref()[split_pos] as usize..],
-                    );
-                    // let new_lcp = self.lcp.get(self.sa.as_ref(), split_pos - 1);
-                    if new_lcp > lcp {
-                        done_intervals.push(interval);
-                        continue;
-                    }
-                    assert!(new_lcp == lcp);
-                    wip_intervals.push(interval.start..split_pos);
-                    wip_intervals.push(split_pos..interval.end);
-                }
-                Some((single_run, anchor_idx, lcp as usize, done_intervals))
-            }
-
-            fn node_output(
-                &self,
-                anchor_pos: usize,
-                lcp: usize,
-                done_intervals: &[std::ops::Range<usize>],
-                _sampled: &mut Vec<usize>,
-                links: &mut Vec<Link>,
-            ) {
-                for x in done_intervals {
-                    if !x.contains(&anchor_pos) {
-                        let secondary_anchor_pos = self
-                            .pi_rmq
-                            .query(self.permuted_pi.as_ref().as_slice(), x.start, x.end - 1)
-                            .1;
-                        let text_idx = self.sa.as_ref()[secondary_anchor_pos] as usize;
-                        let target = text_idx + lcp as usize;
-                        if target < self.t.as_ref().len() {
-                            // NOTE: STPD samples are skipped for now.
-                            // sampled.push(target);
-                            let source = self.sa.as_ref()[anchor_pos] as usize + lcp as usize;
-                            let c = self.t.as_ref()[target];
-                            links.push(Link::new(
-                                source,
-                                c,
-                                co_lcp(&self.t.as_ref()[..source], &self.t.as_ref()[..target]),
-                                target,
-                            ));
-                        }
-                    }
-                }
-            }
-
-            /// Returns a mask of BWT chars in interval.
-            fn dfs(
-                &self,
-                interval: std::ops::Range<usize>,
-                sampled: &mut Vec<usize>,
-                links: &mut Vec<Link>,
-                cdawg_nodes: &mut usize,
-                cdawg_edges: &mut usize,
-            ) {
-                assert!(interval.len() > 0);
-                let Some((single_run, anchor_pos, lcp, done_intervals)) =
-                    self.split(interval.clone())
-                else {
-                    return;
-                };
-                assert!(!single_run);
-                assert!(done_intervals.len() > 1);
-
-                self.node_output(anchor_pos, lcp, &done_intervals, sampled, links);
-                *cdawg_nodes += 1;
-                *cdawg_edges += done_intervals.len();
-
-                for x in &done_intervals {
-                    self.dfs(x.clone(), sampled, links, cdawg_nodes, cdawg_edges);
-                }
-            }
-
-            fn collect_work(
-                &self,
-                interval: std::ops::Range<usize>,
-                sampled: &mut Vec<usize>,
-                links: &mut Vec<Link>,
-                work_queue: &mut Vec<std::ops::Range<usize>>,
-                cdawg_nodes: &mut usize,
-                cdawg_edges: &mut usize,
-            ) {
-                const TARGET_CHUNKS: usize = 64;
-                if interval.len() < self.t.as_ref().len().div_ceil(TARGET_CHUNKS).max(1_000_000) {
-                    work_queue.push(interval);
-                    return;
-                }
-                let Some((single_run, anchor_pos, lcp, done_intervals)) =
-                    self.split(interval.clone())
-                else {
-                    return;
-                };
-                // eprintln!(
-                //     "Split interval of len {} into {} parts",
-                //     interval.len(),
-                //     done_intervals.len()
-                // );
-                assert!(!single_run);
-                assert!(done_intervals.len() > 1);
-                *cdawg_nodes += 1;
-                *cdawg_edges += done_intervals.len();
-
-                self.node_output(anchor_pos, lcp, &done_intervals, sampled, links);
-                for x in done_intervals {
-                    self.collect_work(x, sampled, links, work_queue, cdawg_nodes, cdawg_edges);
-                }
-            }
-        }
-
-        // let run_boundaries: Vec<SaElem> = (0..t.as_ref().len() - 1)
-        //     .into_par_iter()
-        //     .filter(|&i| bwt[i] != bwt[i + 1])
-        //     .map(|i| i as SaElem)
-        //     .collect();
+        let n = t.as_ref().len();
+        // eprintln!("SA: {:?}", sa.as_ref());
         // eprintln!(
-        //     "Run boundaries: {:.3} GB",
-        //     std::mem::size_of_val(run_boundaries.as_slice()) as f32 / 1e9
+        // "LCP: {:?}",
+        // (0..n).map(|i| lcp.get(sa.as_ref(), i)).collect_vec()
         // );
-        // let run_boundaries = BTreeSet::from_iter(run_boundaries);
-        // let s = mem_dbg::MemSize::mem_size(&run_boundaries, SizeFlags::default());
-        // eprintln!("Run boundaries set: {:.3} GB", s as f32 / 1e9);
 
         // empty indicates pi=identity and permuted_pi = sa.
         let permuted_pi: &SA = if pi.is_empty() {
@@ -331,58 +148,119 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
             &sa.as_ref().par_iter().map(|&i| pi[i as usize]).collect()
         };
 
-        // eprintln!();
-        // eprintln!("sa:  {:?}", sa.as_ref());
-        // eprintln!("lcp: {:?}", lcp.as_ref());
-        // eprintln!("ppi: {:?}", permuted_pi);
-        // eprintln!("run boundaries: {:?}", run_boundaries);
-
-        use rmq::Rmq as _;
-        let lcp_rmq = rmq::BlockRmq::build((sa.as_ref(), lcp));
-        eprintln!("lcp rmq: {:.3} GB", lcp_rmq.space() as f32 / 1e9);
-        let pi_rmq = rmq::BlockRmq::build(permuted_pi.as_slice());
-        eprintln!("pi  rmq: {:.3} GB", pi_rmq.space() as f32 / 1e9);
-        let state = State {
-            t,
-            bwt,
-            sa: sa.as_ref(),
-            // run_boundaries,
-            lcp_rmq,
-            lcp,
-            pi_rmq,
-            permuted_pi: &permuted_pi,
+        // Find the best anchor of the set, add links to the others, and return the best.
+        let link = |anchors: &[usize],
+                    lcp: u32,
+                    single_run: bool,
+                    links: &mut Vec<Link>,
+                    cdawg_nodes: &mut usize,
+                    cdawg_edges: &mut usize|
+         -> usize {
+            let best = *anchors.iter().min_by_key(|a| permuted_pi[**a]).unwrap();
+            if single_run || anchors.len() == 1 {
+                return best;
+            }
+            *cdawg_nodes += 1;
+            *cdawg_edges += anchors.len();
+            for &a in anchors {
+                if a == best {
+                    continue;
+                }
+                let text_idx = sa.as_ref()[a] as usize;
+                let target = text_idx + lcp as usize;
+                // TODO: Why do we need this if statement?
+                if target < t.as_ref().len() {
+                    let source = sa.as_ref()[best] as usize + lcp as usize;
+                    let c = t.as_ref()[target];
+                    links.push(Link::new(
+                        source,
+                        c,
+                        co_lcp(&t.as_ref()[..source], &t.as_ref()[..target]),
+                        target,
+                    ));
+                }
+                // eprintln!("Link: {:?}", links.last().unwrap());
+            }
+            best
         };
 
-        let mut stpd_samples = vec![];
-        let mut links = vec![];
-        let mut work_queue = vec![];
-        let mut cdawg_nodes = 1; // the final node
-        let mut cdawg_edges = 0;
-        eprintln!("collecting work..");
-        state.collect_work(
-            0..state.t.as_ref().len(),
-            &mut stpd_samples,
-            &mut links,
-            &mut work_queue,
-            &mut cdawg_nodes,
-            &mut cdawg_edges,
-        );
+        // Returns the anchor for the input interval.
+        // Does a DFS over suffix tree nodes via state (suffix array interval, LCP).
+        // Discovers child intervals and endpoints on-the-fly during linear scan.
+        //
+        let dfs2 = |interval: Range<usize>,
+                    links: &mut Vec<Link>,
+                    cdawg_nodes: &mut usize,
+                    cdawg_edges: &mut usize|
+         -> usize {
+            // eprintln!("DFS2 {interval:?}");
+            let mut stack: Vec<(usize, u32, Vec<usize>)> = vec![];
 
-        eprintln!("Run on {} intervals!", work_queue.len());
+            let mut run_start = interval.start;
+            for i in interval.clone() {
+                if i > 0 && bwt[i] != bwt[i - 1] {
+                    run_start = i;
+                }
+
+                let l = lcp.get(sa.as_ref(), i);
+                // eprintln!("{i} => {l}");
+
+                let mut last_start = i;
+                let mut a = i;
+                while !stack.is_empty() && (l < stack.last().unwrap().1 || i == interval.end - 1) {
+                    let (start, lcp, mut anchors) = stack.pop().unwrap();
+                    anchors.push(a);
+                    let single_run = run_start <= start;
+                    a = link(&anchors, lcp, single_run, links, cdawg_nodes, cdawg_edges);
+                    last_start = start;
+                    // eprintln!(
+                    //     "{start}..={i}: {lcp}  min@{a} {}",
+                    //     if single_run { "single run!" } else { "" }
+                    // );
+                }
+                if i == interval.end - 1 {
+                    assert!(stack.is_empty());
+                    // eprintln!("DFS RETURNS {a}");
+                    return a;
+                }
+                if !stack.is_empty() && l == stack.last().unwrap().1 {
+                    stack.last_mut().unwrap().2.push(a);
+                } else {
+                    // eprintln!("new {last_start}..: {l} first anchor {a}");
+                    stack.push((last_start, l, vec![a]));
+                }
+            }
+            unreachable!();
+
+            // assert!(stack.is_empty());
+            // links.sort_by_key(Link::key);
+            // eprintln!("LINKS");
+            // for link in links {
+            //     eprintln!("{link:?}");
+            // }
+        };
+
+        const PREFIX_LCP: u32 = 3;
+        let intervals: Vec<usize> = (0..=n)
+            .into_par_iter()
+            .filter(|&i| i == 0 || lcp.get(sa.as_ref(), i - 1) <= PREFIX_LCP)
+            .collect();
+        // eprintln!("intervals: {intervals:?}");
+
+        eprintln!("Run on {} intervals!", intervals.len());
         let done = std::sync::atomic::AtomicUsize::new(0);
         let total = std::sync::atomic::AtomicUsize::new(0);
         let ef_total = std::sync::atomic::AtomicUsize::new(0);
         use rayon::prelude::*;
-        let mut child_results: Vec<(Vec<usize>, BareEf, usize, usize)> = work_queue
-            .into_par_iter()
-            .map(|interval| {
-                let mut sampled = vec![];
+        let mut dfs_results: Vec<(usize, BareEf, usize, usize)> = intervals
+            .par_array_windows()
+            // .array_windows()
+            .map(|&[start, end]| {
                 let mut links = vec![];
                 let mut cdawg_nodes = 0;
                 let mut cdawg_edges = 0;
-                state.dfs(
-                    interval,
-                    &mut sampled,
+                let a = dfs2(
+                    start..end,
                     &mut links,
                     &mut cdawg_nodes,
                     &mut cdawg_edges,
@@ -404,21 +282,65 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                     (total * std::mem::size_of::<Link>()) as f32 / 1e9,
                 );
 
-                (sampled, links_ef, cdawg_nodes, cdawg_edges)
+                (a, links_ef, cdawg_nodes, cdawg_edges)
             })
             .collect();
 
+        let mut links: Vec<Link> = vec![];
+        let mut cdawg_nodes = 1; // the final node
+        let mut cdawg_edges = 0;
+        // Process the top few layers.
+        {
+            let mut intervals = intervals;
+            let mut anchors: Vec<_> = dfs_results.iter().map(|x| x.0).collect();
+            // eprintln!("Intervals: {intervals:?}");
+            // eprintln!("Anchors:   {anchors:?}");
+            for cur_lcp in (1..=PREFIX_LCP).rev() {
+                let mut new_intervals = vec![0];
+                let mut new_anchors = vec![];
+
+                let mut start_idx = 0;
+                for end_idx in 1..intervals.len() {
+                    let start = intervals[start_idx];
+                    let end = intervals[end_idx];
+                    if lcp.get(sa.as_ref(), end - 1) < cur_lcp {
+                        new_intervals.push(end);
+                        new_anchors.push(link(
+                            &anchors[start_idx..end_idx],
+                            cur_lcp,
+                            bwt[start..end].iter().all_equal(),
+                            &mut links,
+                            &mut cdawg_nodes,
+                            &mut cdawg_edges,
+                        ));
+                        start_idx = end_idx;
+                    }
+                }
+                anchors = new_anchors;
+                intervals = new_intervals;
+                // eprintln!("Intervals: {intervals:?}");
+                // eprintln!("Anchors:   {anchors:?}");
+            }
+            let min = link(
+                &anchors,
+                0,
+                bwt.iter().all_equal(),
+                &mut links,
+                &mut cdawg_nodes,
+                &mut cdawg_edges,
+            );
+            assert_eq!(sa.as_ref()[min], 0);
+        }
         {
             let mut links = links.into_iter().map(|l| l.key()).collect_vec();
             links.sort();
             links.dedup();
-            child_results.push((vec![], BareEf::from(links), 0, 0));
+            dfs_results.push((0, BareEf::from(links), 0, 0));
         }
 
         let mut num_vals = 0;
-        for (_s, ef, cn, ce) in &child_results {
+        for (_a, ef, cn, ce) in &dfs_results {
             num_vals += ef.len();
-            // stpd_samples.extend(s);
             cdawg_nodes += cn;
             cdawg_edges += ce;
         }
@@ -426,9 +348,9 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
         let ef_links = {
             eprintln!(
                 "Total EF size before merging: {:.3} GB",
-                child_results
+                dfs_results
                     .iter()
-                    .map(|(_s, ef, _cn, _ce)| mem_dbg::MemSize::mem_size(
+                    .map(|(_a, ef, _cn, _ce)| mem_dbg::MemSize::mem_size(
                         ef,
                         mem_dbg::SizeFlags::default()
                     ))
@@ -451,7 +373,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                 let mut i = 0;
                 let mut pivot_idx_iter = pivot_idxs.iter();
                 let mut next_pivot = *pivot_idx_iter.next().unwrap();
-                'outer: for (_s, ef, _cn, _ce) in &child_results {
+                'outer: for (_a, ef, _cn, _ce) in &dfs_results {
                     for x in ef.iter() {
                         if i == next_pivot {
                             pivots.push(x);
@@ -481,26 +403,24 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                 .collect();
             let max = std::sync::Mutex::new(0u128);
             eprintln!("Partitioning EFs");
-            child_results
-                .into_par_iter()
-                .for_each(|(_s, ef, _cn, _ce)| {
-                    if ef.len() == 0 {
-                        return;
-                    }
-                    let vals = ef.iter().collect_vec();
-                    {
-                        let mut max = max.lock().unwrap();
-                        *max = (*max).max(*vals.last().unwrap());
-                    }
-                    let splits = pivots
-                        .iter()
-                        .map(|&p| vals.partition_point(|&x| x < p))
-                        .collect_vec();
-                    for i in 0..pivots.len() - 1 {
-                        let bare_ef = BareEf::from(&vals[splits[i]..splits[i + 1]]);
-                        efs_per_pivot[i].lock().unwrap().push(bare_ef);
-                    }
-                });
+            dfs_results.into_par_iter().for_each(|(_a, ef, _cn, _ce)| {
+                if ef.len() == 0 {
+                    return;
+                }
+                let vals = ef.iter().collect_vec();
+                {
+                    let mut max = max.lock().unwrap();
+                    *max = (*max).max(*vals.last().unwrap());
+                }
+                let splits = pivots
+                    .iter()
+                    .map(|&p| vals.partition_point(|&x| x < p))
+                    .collect_vec();
+                for i in 0..pivots.len() - 1 {
+                    let bare_ef = BareEf::from(&vals[splits[i]..splits[i + 1]]);
+                    efs_per_pivot[i].lock().unwrap().push(bare_ef);
+                }
+            });
             let efs_per_pivot = efs_per_pivot
                 .into_iter()
                 .map(|m| m.into_inner().unwrap())
@@ -592,15 +512,14 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
         //     std::mem::size_of_val(links.as_slice()) as f32 / 1e9
         // );
 
-        let State { t, sa: _sa, .. } = state;
-
         // use voracious_radix_sort::RadixSort;
         // stpd_samples.voracious_mt_sort(12);
         // // FIXME: THIS IS TERRIBLY SLOW FOR 12 BYTE DATA.
         // links.voracious_mt_sort(12);
 
-        stpd_samples.dedup();
-        assert_eq!(stpd_samples.len(), 0);
+        // let stpd_samples
+        // stpd_samples.dedup();
+        // assert_eq!(stpd_samples.len(), 0);
         // links.dedup();
         // Free the excess capacity.
         // links.shrink_to_fit();
@@ -648,15 +567,9 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
             eprintln!("Number of (pos,c) with >4 link: {c4}",);
         }
 
-        stpd_samples.sort_by(|&a, &b| cmp_colex(&t.as_ref()[..=a], &t.as_ref()[..=b]).1);
+        // Note: replace by the set of all jump targets if needed.
+        let stpd_samples = vec![];
         let stpd_pi: Vec<u64> = stpd_samples.iter().map(|&x| pi[x] as u64).collect();
-        // stpd_samples.iter().take(10).for_each(|&i| {
-        //     eprintln!(
-        //         "{i:>3}: {} ({})",
-        //         crate::print(&t.as_ref()[i.saturating_sub(30)..=i]),
-        //         pi[i]
-        //     );
-        // });
 
         JumpIndex {
             t,
@@ -670,13 +583,15 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
     }
 
     pub fn stats(&self) -> JumpIndexStats {
+        let mut stpd_samples: Vec<usize> = self
+            .ef_links
+            .iter()
+            .map(|l| Link::from_key(l).target())
+            .collect();
+        stpd_samples.voracious_mt_sort(12);
+        stpd_samples.dedup();
         JumpIndexStats {
-            num_sampled: 1 + self
-                .stpd_samples
-                .iter()
-                .tuple_windows()
-                .filter(|(a, b)| a != b)
-                .count(),
+            num_sampled: stpd_samples.len(),
             num_sources: 1 + self
                 .ef_links
                 .iter()

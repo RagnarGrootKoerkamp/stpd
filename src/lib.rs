@@ -1,4 +1,4 @@
-#![feature(gen_blocks, bstr, vec_from_fn, vec_try_remove)]
+#![feature(gen_blocks, bstr, vec_from_fn)]
 use std::{cmp::{Reverse}, collections::{HashMap, HashSet}, hash::{Hash, Hasher}};
 use itertools::Itertools;
 use jump_index::JumpIndexStats;

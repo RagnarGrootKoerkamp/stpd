@@ -263,9 +263,7 @@ fn main() {
     let texts = [
         // ragc(),
         pizzachili(dataset.as_deref()),
-        // vec![
-        //     ("manual".to_string(), b"AGAGCGAGAGCGCGC#".to_vec()),
-        // ],
+        // vec![("manual".to_string(), b"AGAGCGAGAGCGCGC#".to_vec())],
         // variants(fib(15)),
         vec![
             // relative(100, 4, 200, 0.01),
