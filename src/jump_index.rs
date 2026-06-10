@@ -3,6 +3,7 @@ use std::{
     cmp::Ordering::{Greater, Less},
     marker::Sync,
 };
+use sux::{bits::BitVec, dict::EliasFano, rank_sel::SelectZeroAdaptConst, traits::Succ};
 
 use crate::{
     bwt,
@@ -17,39 +18,46 @@ use crate::{
 #[derive(Copy, Clone, PartialEq, PartialOrd, Eq, Ord, Debug)]
 pub struct Link {
     data: u128,
-    // 6 bytes
     // source: usize,
-    // 1 byte
     // c: u8,
-    // 3 bytes
     // lcp: usize,
-    // 6 bytes
     // target: usize,
 }
 
+const SOURCE_BITS: u32 = 31;
+const C_BITS: u32 = 2;
+const LCP_BITS: u32 = 22; // enough for reference genome
+const TARGET_BITS: u32 = 31; // enough for reference genome
+const LINK_BITS: u32 = SOURCE_BITS + C_BITS + LCP_BITS + TARGET_BITS;
+
 impl Link {
+    fn from_key(data: u128) -> Self {
+        Self { data }
+    }
     fn new(source: usize, c: u8, lcp: usize, target: usize) -> Self {
-        Self {
-            data: ((source as u128) << 80)
-                | ((c as u128) << 72)
-                | ((lcp as u128) << 48)
-                | (target as u128),
-        }
+        let data = ((source as u128) << (C_BITS + LCP_BITS + TARGET_BITS))
+            | ((c as u128) << (LCP_BITS + TARGET_BITS))
+            | ((lcp as u128) << TARGET_BITS)
+            | (target as u128);
+        Self { data }
     }
     fn key(&self) -> u128 {
         self.data
     }
     fn source(&self) -> usize {
-        (self.data >> 80) as usize
+        ((self.key() >> (C_BITS + LCP_BITS + TARGET_BITS)) & ((1 << SOURCE_BITS) - 1)) as usize
     }
     fn source_c(&self) -> usize {
-        (self.data >> 72) as usize
+        ((self.key() >> (LCP_BITS + TARGET_BITS)) & ((1 << (SOURCE_BITS + C_BITS)) - 1)) as usize
     }
     fn c(&self) -> u8 {
-        (self.data >> 72) as u8
+        ((self.key() >> (LCP_BITS + TARGET_BITS)) & ((1 << C_BITS) - 1)) as u8
+    }
+    fn lcp(&self) -> usize {
+        ((self.key() >> TARGET_BITS) & ((1 << LCP_BITS) - 1)) as usize
     }
     fn target(&self) -> usize {
-        (self.data & ((1 << 48) - 1)) as usize
+        (self.key() & ((1 << TARGET_BITS) - 1)) as usize
     }
 }
 
@@ -66,7 +74,7 @@ pub struct JumpIndex<TR: AsRef<T>> {
     pub stpd_pi: Vec<u64>,
     pub stpd_rmq: rmq::BlockRmq<u64, 64>,
     // TODO: Predecessor structure
-    pub links: Vec<Link>,
+    pub ef_links: EliasFano<u128, SelectZeroAdaptConst<BitVec<Box<[usize]>>, Box<[usize]>>>,
     pub cdawg_nodes: usize,
     pub cdawg_edges: usize,
 }
@@ -366,16 +374,18 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
             cdawg_edges += ce;
         }
 
-        let State { t, sa: _sa, .. } = state;
-
-        use voracious_radix_sort::RadixSort;
-        stpd_samples.voracious_mt_sort(12);
-        links.voracious_mt_sort(12);
-
         eprintln!(
             "Links: {:.3} GB",
             std::mem::size_of_val(links.as_slice()) as f32 / 1e9
         );
+
+        let State { t, sa: _sa, .. } = state;
+
+        use voracious_radix_sort::RadixSort;
+        stpd_samples.voracious_mt_sort(12);
+        // FIXME: THIS IS TERRIBLY SLOW FOR 12 BYTE DATA.
+        links.voracious_mt_sort(12);
+
         stpd_samples.dedup();
         links.dedup();
         // Free the excess capacity.
@@ -388,6 +398,23 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
         eprintln!(
             "Max LCP: {}",
             links.iter().map(|l| l.lcp()).max().unwrap_or(0)
+        );
+
+        let mut ef_builder =
+            sux::dict::elias_fano::EliasFanoBuilder::<u128>::new(links.len(), 1 << LINK_BITS);
+
+        links.reverse();
+        for i in (0..links.len()).rev() {
+            ef_builder.push(links[i].key());
+            if i % (1 << 25) == 0 {
+                links.truncate(i);
+                links.shrink_to_fit();
+            }
+        }
+        let ef_links = ef_builder.build_with_dict();
+        eprintln!(
+            "Links: {:.3} GB (EF)",
+            mem_dbg::MemSize::mem_size(&ef_links, mem_dbg::SizeFlags::default()) as f32 / 1e9
         );
 
         stpd_samples.sort_by(|&a, &b| cmp_colex(&t.as_ref()[..=a], &t.as_ref()[..=b]).1);
@@ -405,7 +432,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
             stpd_samples,
             stpd_rmq: rmq::BlockRmq::build(stpd_pi.as_slice()),
             stpd_pi,
-            links,
+            ef_links,
             cdawg_nodes,
             cdawg_edges,
         }
@@ -420,19 +447,19 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                 .filter(|(a, b)| a != b)
                 .count(),
             num_sources: 1 + self
-                .links
+                .ef_links
                 .iter()
                 .tuple_windows()
-                .filter(|(a, b)| a.source() != b.source())
+                .filter(|&(a, b)| Link::from_key(a).source() != Link::from_key(b).source())
                 .count(),
             num_source_chars: 1 + self
-                .links
+                .ef_links
                 .iter()
                 .tuple_windows()
-                .filter(|(a, b)| a.source_c() != b.source_c())
+                .filter(|&(a, b)| Link::from_key(a).source_c() != Link::from_key(b).source_c())
                 .count(),
             num_links: 1 + self
-                .links
+                .ef_links
                 .iter()
                 .tuple_windows()
                 .filter(|(a, b)| a != b)
@@ -443,34 +470,34 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
     }
 
     pub fn inspect_links(&self) {
-        eprintln!("Links: {}", self.links.len());
-        if self.links.len() < 10000 {
-            for i in 0..self.links.len() {
-                eprintln!("{i:>8} {:?}", self.links[i]);
-            }
+        eprintln!("Links: {}", self.ef_links.len());
+        if self.ef_links.len() < 10000 {
+            // for i in 0..self.ef_links.len() {
+            //     eprintln!("{i:>8} {:?}", self.ef_links[i]);
+            // }
         } else {
-            for i in (0..self.links.len()).step_by(100000) {
-                for i in i..i + 100 {
-                    eprintln!("{i:>8} {:?}", self.links[i]);
-                }
-                eprintln!("---");
-            }
+            // for i in (0..self.ef_links.len()).step_by(100000) {
+            //     for i in i..i + 100 {
+            //         eprintln!("{i:>8} {:?}", self.ef_links[i]);
+            //     }
+            //     eprintln!("---");
+            // }
         }
-        eprintln!("---");
+        // eprintln!("---");
 
-        eprintln!("Samples: {}", self.stpd_samples.len());
-        if self.stpd_samples.len() < 30000 {
-            for i in 0..self.stpd_samples.len() {
-                eprintln!("{i:>8} {:>7}", self.stpd_samples[i]);
-            }
-        } else {
-            for i in (0..self.stpd_samples.len()).step_by(100000) {
-                for i in i..i + 100 {
-                    eprintln!("{i:>8} {:>7}", self.stpd_samples[i]);
-                }
-                eprintln!("---");
-            }
-        }
+        // eprintln!("Samples: {}", self.stpd_samples.len());
+        // if self.stpd_samples.len() < 30000 {
+        //     for i in 0..self.stpd_samples.len() {
+        //         eprintln!("{i:>8} {:>7}", self.stpd_samples[i]);
+        //     }
+        // } else {
+        //     for i in (0..self.stpd_samples.len()).step_by(100000) {
+        //         for i in i..i + 100 {
+        //             eprintln!("{i:>8} {:>7}", self.stpd_samples[i]);
+        //         }
+        //         eprintln!("---");
+        //     }
+        // }
     }
 
     pub fn space(&self) {
@@ -488,7 +515,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
         // );
         eprintln!(
             "jump index   {:.3} GB",
-            std::mem::size_of_val(self.links.as_slice()) as f32 / 1e9
+            mem_dbg::MemSize::mem_size(&self.ef_links, mem_dbg::SizeFlags::default()) as f32 / 1e9
         );
     }
 
@@ -543,11 +570,8 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                 continue;
             }
 
-            let link_idx = self
-                .links
-                .binary_search_by(|link| link.key().cmp(&Link::new(pos, c, i, 0).key()))
-                .map_or_else(|e| e, |v| v);
-            let link = self.links[link_idx];
+            let (_idx, link) = self.ef_links.succ(&Link::new(pos, c, i, 0).key()).unwrap();
+            let link = Link::from_key(link);
             // eprintln!("pos {pos} link {link:?}");
             if link.source() == pos && link.c() as u8 == c {
                 pos = link.target() + 1;

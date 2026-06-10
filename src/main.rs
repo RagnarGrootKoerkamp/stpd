@@ -103,6 +103,7 @@ fn stats((name, t): &(String, T), print: bool) {
     eprint!("| {name:<30} | {n:>6.2} | {r:>6.2} | pos-   | ");
     eprintln!();
     let stpd_pos_minus = stpd_pos_minus(t, sa, bwt, lcp);
+    return;
     // eprint!("| {name} | {n:>6.2} | {r:>6.2} | pos+   | ");
     // let stpd_pos_plus = stpd_pos_plus(t, sa, bwt, lcp);
     eprint!("| {:<30} | {:>6} | {:>6} | lex-   | ", "", "", "");
