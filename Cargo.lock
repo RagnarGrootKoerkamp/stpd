@@ -1629,6 +1629,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_arrays"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "38636132857f68ec3d5f3eb121166d2af33cb55174c4d5ff645db6165cbef0fd"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "serde_core"
 version = "1.0.228"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1761,6 +1770,8 @@ dependencies = [
  "rand 0.10.1",
  "rayon",
  "rdst",
+ "serde",
+ "serde_arrays",
  "succinctly",
  "sync-cell-slice",
  "tempfile",
@@ -1831,6 +1842,7 @@ dependencies = [
 name = "text-indexing"
 version = "0.1.0"
 dependencies = [
+ "bincode",
  "copse",
  "env_logger",
  "itertools 0.14.0",
@@ -1842,6 +1854,7 @@ dependencies = [
  "ragc-core",
  "rand 0.9.2",
  "rayon",
+ "serde",
  "simd-minimizers",
  "sux",
  "tiered-vector",

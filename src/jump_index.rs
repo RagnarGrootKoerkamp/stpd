@@ -11,7 +11,7 @@ use crate::{
     lcp::CompactLcp,
     longest_common_prefix,
     rmq::{self, Rmq},
-    sa_and_lcp,
+    sa_and_lcp_cached,
     stpd::cmp_colex,
     SaElem, SA, T,
 };
@@ -35,7 +35,7 @@ type LinkEf = EliasFano<u128, SelectZeroAdaptConst<BitVec<Box<[usize]>>, Box<[us
 type BareEf = EliasFano<u128, BitVec<Box<[usize]>>>;
 
 impl Link {
-    const MAX: u128 = (1 << LINK_BITS) - 1;
+    // const MAX: u128 = (1 << LINK_BITS) - 1;
     fn from_key(data: u128) -> Self {
         Self { data }
     }
@@ -114,7 +114,7 @@ pub struct JumpIndexStats {
 
 impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
     pub fn new(t: TR) -> Self {
-        let (sa, lcp) = sa_and_lcp(t.as_ref());
+        let (sa, lcp) = sa_and_lcp_cached(t.as_ref());
         let bwt = &bwt(t.as_ref(), &sa);
         // let pi = (0..t.as_ref().len()).collect_vec();
         Self::new2(t, sa, bwt, &lcp, &vec![])

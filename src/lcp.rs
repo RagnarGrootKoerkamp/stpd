@@ -6,6 +6,7 @@ use sux::{
 use crate::SA;
 
 /// See https://ae.iti.kit.edu/download/ti_lec11_1.pdf
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct CompactLcp {
     bits: sux::rank_sel::SelectAdaptConst<AddNumBits<BitVec>>,
 }

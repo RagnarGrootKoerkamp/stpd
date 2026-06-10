@@ -1,5 +1,5 @@
 #![feature(gen_blocks, bstr, vec_from_fn, vec_try_remove)]
-use std::{cmp::{Reverse}, collections::{HashMap, HashSet}};
+use std::{cmp::{Reverse}, collections::{HashMap, HashSet}, hash::{Hash, Hasher}};
 use itertools::Itertools;
 use jump_index::JumpIndexStats;
 use lcp::CompactLcp;
@@ -99,6 +99,41 @@ pub fn sa_and_lcp(t: &T) -> (SA, CompactLcp) {
     // lcp.push(0);
 
     (sa, lcp)
+}
+
+pub fn sa_and_lcp_cached(t: &T) -> (SA, CompactLcp) {
+    use std::collections::hash_map::DefaultHasher;
+    use std::fs;
+    use std::path::Path;
+
+    // Hash the input text
+    let mut hasher = DefaultHasher::new();
+    t.hash(&mut hasher);
+    let hash = hasher.finish();
+    
+    // Create cache directory if it doesn't exist
+    let cache_dir = Path::new("_cache");
+    if !cache_dir.exists() {
+        fs::create_dir_all(cache_dir).expect("Failed to create _cache directory");
+    }
+    
+    let cache_file = cache_dir.join(format!("{:x}.bin", hash));
+    
+    // Try to load from cache
+    if cache_file.exists() {
+        eprintln!("Loading from cache: {:?}", cache_file);
+        let data = fs::read(&cache_file).unwrap();
+        return bincode::deserialize::<(SA, CompactLcp)>(&data).unwrap();
+    }
+    
+    // Compute SA and LCP
+    let result = sa_and_lcp(t);
+    
+    // Write to cache
+    eprintln!("Writing to cache: {:?}", cache_file);
+    fs::write(&cache_file, bincode::serialize(&result).unwrap()).unwrap();
+
+    result
 }
 
 pub fn bwt(t: &T, sa: &SA) -> T {

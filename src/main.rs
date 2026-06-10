@@ -45,7 +45,7 @@ fn stats((name, t): &(String, T), print: bool) {
         eprintln!("T: {}", crate::print(t));
     }
     let n = t.len();
-    let (sa, lcp) = &sa_and_lcp(t);
+    let (sa, lcp) = &sa_and_lcp_cached(t);
 
     // let mut nodes = 0;
     // let mut node_depth = 0;
