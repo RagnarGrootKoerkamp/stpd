@@ -437,7 +437,8 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
             );
 
             eprintln!("Select pivots");
-            let mut pivot_idxs = (0..1000)
+            // Oversample 100x to smoothen the distribution.
+            let mut pivot_idxs = (0..10000)
                 .map(|_| rand::random_range(0..num_vals))
                 .collect_vec();
             pivot_idxs.sort_unstable();
@@ -460,11 +461,19 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                         i += 1;
                     }
                 }
-                pivots.push(0);
-                pivots.push(u128::MAX);
                 pivots.sort_unstable();
+                // Keep only every 100'th pivot
+                pivots = pivots
+                    .into_iter()
+                    .enumerate()
+                    .filter(|(i, _)| i % 100 == 0)
+                    .map(|(_, x)| x)
+                    .collect_vec();
+                pivots.insert(0, 0);
+                pivots.push(u128::MAX);
                 pivots.dedup();
             }
+
             let mut efs_per_pivot = vec![vec![]; pivots.len()];
             let mut max = 0u128;
             eprintln!("Partitioning EFs");
