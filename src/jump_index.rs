@@ -25,16 +25,34 @@ pub struct Link {
 }
 
 const SOURCE_BITS: u32 = 31;
-const C_BITS: u32 = 2;
+const C_BITS: u32 = 8; // TODO: Reduce to 2
 const LCP_BITS: u32 = 22; // enough for reference genome
 const TARGET_BITS: u32 = 31; // enough for reference genome
 const LINK_BITS: u32 = SOURCE_BITS + C_BITS + LCP_BITS + TARGET_BITS;
 
 impl Link {
+    const MAX: u128 = (1 << LINK_BITS) - 1;
     fn from_key(data: u128) -> Self {
         Self { data }
     }
     fn new(source: usize, c: u8, lcp: usize, target: usize) -> Self {
+        assert!(LINK_BITS <= 128);
+        assert!(
+            source < (1 << SOURCE_BITS) as usize,
+            "link {source},{c} -> {lcp},{target}"
+        );
+        assert!(
+            (c as usize) < (1 << C_BITS),
+            "link {source},{c} -> {lcp},{target}"
+        );
+        assert!(
+            lcp < (1 << LCP_BITS) as usize,
+            "link {source},{c} -> {lcp},{target}"
+        );
+        assert!(
+            target < (1 << TARGET_BITS) as usize,
+            "link {source},{c} -> {lcp},{target}"
+        );
         let data = ((source as u128) << (C_BITS + LCP_BITS + TARGET_BITS))
             | ((c as u128) << (LCP_BITS + TARGET_BITS))
             | ((lcp as u128) << TARGET_BITS)
@@ -401,7 +419,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
         );
 
         let mut ef_builder =
-            sux::dict::elias_fano::EliasFanoBuilder::<u128>::new(links.len(), 1 << LINK_BITS);
+            sux::dict::elias_fano::EliasFanoBuilder::<u128>::new(links.len(), Link::MAX);
 
         links.reverse();
         for i in (0..links.len()).rev() {
