@@ -424,8 +424,20 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
         }
 
         let ef_links = {
+            eprintln!(
+                "Total EF size before merging: {:.3} GB",
+                child_results
+                    .iter()
+                    .map(|(_s, ef, _cn, _ce)| mem_dbg::MemSize::mem_size(
+                        ef,
+                        mem_dbg::SizeFlags::default()
+                    ))
+                    .sum::<usize>() as f32
+                    / 1e9
+            );
+
             eprintln!("Select pivots");
-            let mut pivot_idxs = (0..100)
+            let mut pivot_idxs = (0..1000)
                 .map(|_| rand::random_range(0..num_vals))
                 .collect_vec();
             pivot_idxs.sort_unstable();
@@ -470,39 +482,79 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                     efs_per_pivot[i].push(BareEf::from(&vals[splits[i]..splits[i + 1]]));
                 }
             }
+            eprintln!(
+                "Total EF size after partitioning: {:.3} GB",
+                efs_per_pivot
+                    .iter()
+                    .flatten()
+                    .map(|ef| mem_dbg::MemSize::mem_size(ef, mem_dbg::SizeFlags::default()))
+                    .sum::<usize>() as f32
+                    / 1e9
+            );
+
             eprintln!("Build an EF for each part");
-            let mut part_efs: Vec<BareEf> = efs_per_pivot
+            let part_efs: Vec<(u128, BareEf)> = efs_per_pivot
                 .into_par_iter()
-                .map(|efs| {
+                .enumerate()
+                .map_with(vec![], |vals: &mut Vec<u128>, (i, efs)| {
                     eprintln!(
-                        "Merging {} EFs of total len {}",
+                        "{i}: Merging {} EFs of total len {} total size {:.3}",
                         efs.len(),
-                        efs.iter().map(|ef| ef.len()).sum::<usize>()
+                        efs.iter().map(|ef| ef.len()).sum::<usize>(),
+                        efs.iter()
+                            .map(|ef| mem_dbg::MemSize::mem_size(ef, mem_dbg::SizeFlags::default()))
+                            .sum::<usize>() as f32
+                            / 1e9,
                     );
-                    let mut vals = vec![];
                     for ef in efs {
                         vals.extend(ef.iter());
                     }
                     eprintln!(
-                        "vals size: {} GB",
+                        "{i}: vals size: {:.3} GB",
                         std::mem::size_of_val(vals.as_slice()) as f32 / 1e9
                     );
                     vals.sort_unstable();
                     vals.dedup();
-                    BareEf::from(vals)
+                    let min = *vals.first().unwrap_or(&0);
+                    for x in &mut *vals {
+                        *x -= min;
+                    }
+                    let out = BareEf::from(&mut *vals);
+                    vals.clear();
+                    eprintln!(
+                        "{i}: output EF size: {:.3} GB",
+                        mem_dbg::MemSize::mem_size(&out, mem_dbg::SizeFlags::default()) as f32
+                            / 1e9
+                    );
+                    (min, out)
                 })
                 .collect();
-            let n = part_efs.iter().map(|ef| ef.len()).sum();
+            eprintln!(
+                "Total EF size after building parts: {:.3} GB",
+                part_efs
+                    .iter()
+                    .map(|(_min, ef)| mem_dbg::MemSize::mem_size(ef, mem_dbg::SizeFlags::default()))
+                    .sum::<usize>() as f32
+                    / 1e9
+            );
+
+            let n = part_efs.iter().map(|ef| ef.1.len()).sum();
             eprintln!("Merge part EFs. Dedupped to {n} links");
             let mut ef_builder = sux::dict::elias_fano::EliasFanoBuilder::<u128>::new(n, max);
-            for part_ef in &mut part_efs {
-                ef_builder.extend(part_ef.iter());
+            for (min, part_ef) in part_efs {
+                eprintln!(
+                    "Extending by {} elems size {}",
+                    part_ef.len(),
+                    mem_dbg::MemSize::mem_size(&part_ef, mem_dbg::SizeFlags::default()) as f32
+                        / 1e9
+                );
+                ef_builder.extend(part_ef.iter().map(|x| x + min));
             }
             ef_builder.build_with_dict()
         };
 
         eprintln!(
-            "EF Links: {:.3} GB (EF)",
+            "final EF size: {:.3} GB",
             mem_dbg::MemSize::mem_size(&ef_links, mem_dbg::SizeFlags::default()) as f32 / 1e9
         );
 
