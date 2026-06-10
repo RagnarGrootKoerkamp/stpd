@@ -32,7 +32,7 @@ const TARGET_BITS: u32 = 31; // enough for reference genome
 const LINK_BITS: u32 = SOURCE_BITS + C_BITS + LCP_BITS + TARGET_BITS;
 
 type LinkEf = EliasFano<u128, SelectZeroAdaptConst<BitVec<Box<[usize]>>, Box<[usize]>, 12, 3>>;
-type BareEf = EliasFano<u128, BitVec<Box<[usize]>>>;
+type BareEf = EliasFano<u128>;
 
 impl Link {
     // const MAX: u128 = (1 << LINK_BITS) - 1;
@@ -128,9 +128,9 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
             sa: &'a SA,
             lcp: &'a CompactLcp,
             // run_boundaries: Vec<SaElem>,
-            lcp_rmq: rmq::BlockRmq<crate::LcpElem, 32>,
+            lcp_rmq: rmq::BlockRmq<crate::LcpElem, 16>,
             permuted_pi: &'a SA,
-            pi_rmq: rmq::BlockRmq<SaElem, 128>,
+            pi_rmq: rmq::BlockRmq<SaElem, 64>,
         }
 
         impl<'a, TR: AsRef<T>, SAR: AsRef<SA>> State<'a, TR, SAR> {
@@ -283,7 +283,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                 cdawg_nodes: &mut usize,
                 cdawg_edges: &mut usize,
             ) {
-                const TARGET_CHUNKS: usize = 128;
+                const TARGET_CHUNKS: usize = 64;
                 if interval.len() < self.t.as_ref().len().div_ceil(TARGET_CHUNKS).max(1_000_000) {
                     work_queue.push(interval);
                     return;
@@ -437,8 +437,10 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
             );
 
             eprintln!("Select pivots");
+            const NUM_PIVOTS: usize = 40;
+            const OVERSAMPLING: usize = 100;
             // Oversample 100x to smoothen the distribution.
-            let mut pivot_idxs = (0..10000)
+            let mut pivot_idxs = (0..NUM_PIVOTS * OVERSAMPLING)
                 .map(|_| rand::random_range(0..num_vals))
                 .collect_vec();
             pivot_idxs.sort_unstable();
@@ -466,7 +468,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                 pivots = pivots
                     .into_iter()
                     .enumerate()
-                    .filter(|(i, _)| i % 100 == 0)
+                    .filter(|(i, _)| i % OVERSAMPLING == 0)
                     .map(|(_, x)| x)
                     .collect_vec();
                 pivots.insert(0, 0);
@@ -474,23 +476,36 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                 pivots.dedup();
             }
 
-            let mut efs_per_pivot = vec![vec![]; pivots.len()];
-            let mut max = 0u128;
+            let efs_per_pivot: Vec<std::sync::Mutex<Vec<BareEf>>> = (0..pivots.len())
+                .map(|_| std::sync::Mutex::new(vec![]))
+                .collect();
+            let max = std::sync::Mutex::new(0u128);
             eprintln!("Partitioning EFs");
-            for (_s, ef, _cn, _ce) in child_results {
-                if ef.len() == 0 {
-                    continue;
-                }
-                let vals = ef.iter().collect_vec();
-                max = max.max(*vals.last().unwrap());
-                let splits = pivots
-                    .iter()
-                    .map(|&p| vals.partition_point(|&x| x < p))
-                    .collect_vec();
-                for i in 0..pivots.len() - 1 {
-                    efs_per_pivot[i].push(BareEf::from(&vals[splits[i]..splits[i + 1]]));
-                }
-            }
+            child_results
+                .into_par_iter()
+                .for_each(|(_s, ef, _cn, _ce)| {
+                    if ef.len() == 0 {
+                        return;
+                    }
+                    let vals = ef.iter().collect_vec();
+                    {
+                        let mut max = max.lock().unwrap();
+                        *max = (*max).max(*vals.last().unwrap());
+                    }
+                    let splits = pivots
+                        .iter()
+                        .map(|&p| vals.partition_point(|&x| x < p))
+                        .collect_vec();
+                    for i in 0..pivots.len() - 1 {
+                        let bare_ef = BareEf::from(&vals[splits[i]..splits[i + 1]]);
+                        efs_per_pivot[i].lock().unwrap().push(bare_ef);
+                    }
+                });
+            let efs_per_pivot = efs_per_pivot
+                .into_iter()
+                .map(|m| m.into_inner().unwrap())
+                .collect_vec();
+            let max = max.into_inner().unwrap();
             eprintln!(
                 "Total EF size after partitioning: {:.3} GB",
                 efs_per_pivot
@@ -505,7 +520,8 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
             let part_efs: Vec<(u128, BareEf)> = efs_per_pivot
                 .into_par_iter()
                 .enumerate()
-                .map_with(vec![], |vals: &mut Vec<u128>, (i, efs)| {
+                .map(|(i, efs)| {
+                    let mut vals = vec![];
                     eprintln!(
                         "{i}: Merging {} EFs of total len {} total size {:.3}",
                         efs.len(),
@@ -522,14 +538,18 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                         "{i}: vals size: {:.3} GB",
                         std::mem::size_of_val(vals.as_slice()) as f32 / 1e9
                     );
-                    vals.sort_unstable();
+                    vals.voracious_sort();
+                    // vals.sort_unstable();
                     vals.dedup();
+                    eprintln!(
+                        "{i}: vals size after dedup: {:.3} GB",
+                        std::mem::size_of_val(vals.as_slice()) as f32 / 1e9
+                    );
                     let min = *vals.first().unwrap_or(&0);
                     for x in &mut *vals {
                         *x -= min;
                     }
-                    let out = BareEf::from(&mut *vals);
-                    vals.clear();
+                    let out = BareEf::from(vals);
                     eprintln!(
                         "{i}: output EF size: {:.3} GB",
                         mem_dbg::MemSize::mem_size(&out, mem_dbg::SizeFlags::default()) as f32
@@ -580,6 +600,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
         // links.voracious_mt_sort(12);
 
         stpd_samples.dedup();
+        assert_eq!(stpd_samples.len(), 0);
         // links.dedup();
         // Free the excess capacity.
         // links.shrink_to_fit();
