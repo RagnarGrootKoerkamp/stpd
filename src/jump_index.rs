@@ -429,6 +429,27 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                 links.shrink_to_fit();
             }
         }
+        eprintln!(
+            "Average LCP: {:.2}",
+            links.iter().map(|l| l.lcp()).sum::<usize>() as f32 / links.len() as f32
+        );
+        {
+            let mut c1 = 0;
+            let mut c2 = 0;
+            let mut c3 = 0;
+            let mut c4 = 0;
+            let chunks = links.iter().chunk_by(|l| (l.source(), l.c()));
+            for group in chunks.into_iter().map(|(k, g)| (k, g.count())) {
+                c1 += (group.1 > 1) as usize;
+                c2 += (group.1 > 2) as usize;
+                c3 += (group.1 > 3) as usize;
+                c4 += (group.1 > 4) as usize;
+            }
+            eprintln!("Number of (pos,c) with >1 link: {c1}",);
+            eprintln!("Number of (pos,c) with >2 link: {c2}",);
+            eprintln!("Number of (pos,c) with >3 link: {c3}",);
+            eprintln!("Number of (pos,c) with >4 link: {c4}",);
+        }
         let ef_links = ef_builder.build_with_dict();
         eprintln!(
             "Links: {:.3} GB (EF)",
