@@ -6,6 +6,11 @@ use lcp::CompactLcp;
 use rand::{rng, seq::SliceRandom};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
+use tikv_jemallocator::Jemalloc;
+
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
+
 pub mod strings;
 pub mod test;
 pub mod stpd;
