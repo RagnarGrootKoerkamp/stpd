@@ -4,6 +4,7 @@ use std::{
     marker::Sync,
 };
 use sux::{bits::BitVec, dict::EliasFano, rank_sel::SelectZeroAdaptConst, traits::Succ};
+use voracious_radix_sort::RadixSort;
 
 use crate::{
     bwt,
@@ -15,7 +16,7 @@ use crate::{
     SaElem, SA, T,
 };
 
-#[derive(Copy, Clone, PartialEq, PartialOrd, Eq, Ord, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub struct Link {
     data: u128,
     // source: usize,
@@ -29,6 +30,9 @@ const C_BITS: u32 = 8; // TODO: Reduce to 2
 const LCP_BITS: u32 = 22; // enough for reference genome
 const TARGET_BITS: u32 = 31; // enough for reference genome
 const LINK_BITS: u32 = SOURCE_BITS + C_BITS + LCP_BITS + TARGET_BITS;
+
+type LinkEf = EliasFano<u128, SelectZeroAdaptConst<BitVec<Box<[usize]>>, Box<[usize]>, 12, 3>>;
+type BareEf = EliasFano<u128, BitVec<Box<[usize]>>>;
 
 impl Link {
     const MAX: u128 = (1 << LINK_BITS) - 1;
@@ -77,12 +81,14 @@ impl Link {
     fn target(&self) -> usize {
         (self.key() & ((1 << TARGET_BITS) - 1)) as usize
     }
-}
 
-impl voracious_radix_sort::Radixable<u128> for Link {
-    type Key = u128;
-    fn key(&self) -> Self::Key {
-        self.key()
+    /// Store all values 'mirrored': `u-x` for x from large to small,
+    /// where `u` is the largest element.
+    fn links_to_ef(links: Vec<Link>) -> BareEf {
+        let mut links = links.into_iter().map(|l| l.key()).collect_vec();
+        links.voracious_sort();
+        links.dedup();
+        BareEf::from(links)
     }
 }
 
@@ -92,7 +98,7 @@ pub struct JumpIndex<TR: AsRef<T>> {
     pub stpd_pi: Vec<u64>,
     pub stpd_rmq: rmq::BlockRmq<u64, 64>,
     // TODO: Predecessor structure
-    pub ef_links: EliasFano<u128, SelectZeroAdaptConst<BitVec<Box<[usize]>>, Box<[usize]>>>,
+    pub ef_links: LinkEf,
     pub cdawg_nodes: usize,
     pub cdawg_edges: usize,
 }
@@ -116,8 +122,6 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
 }
 impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
     pub fn new2<SAR: AsRef<SA> + Sync>(t: TR, sa: SAR, bwt: &T, lcp: &CompactLcp, pi: &SA) -> Self {
-        const PARALLEL_THRESHOLD: usize = 100_000_000;
-
         struct State<'a, T, SA> {
             t: T,
             bwt: &'a Vec<u8>,
@@ -279,14 +283,21 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                 cdawg_nodes: &mut usize,
                 cdawg_edges: &mut usize,
             ) {
-                if interval.len() < PARALLEL_THRESHOLD {
+                const TARGET_CHUNKS: usize = 128;
+                if interval.len() < self.t.as_ref().len().div_ceil(TARGET_CHUNKS).max(1_000_000) {
                     work_queue.push(interval);
                     return;
                 }
-                let Some((single_run, anchor_pos, lcp, done_intervals)) = self.split(interval)
+                let Some((single_run, anchor_pos, lcp, done_intervals)) =
+                    self.split(interval.clone())
                 else {
                     return;
                 };
+                // eprintln!(
+                //     "Split interval of len {} into {} parts",
+                //     interval.len(),
+                //     done_intervals.len()
+                // );
                 assert!(!single_run);
                 assert!(done_intervals.len() > 1);
                 *cdawg_nodes += 1;
@@ -360,8 +371,9 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
         eprintln!("Run on {} intervals!", work_queue.len());
         let done = std::sync::atomic::AtomicUsize::new(0);
         let total = std::sync::atomic::AtomicUsize::new(0);
+        let ef_total = std::sync::atomic::AtomicUsize::new(0);
         use rayon::prelude::*;
-        let child_results: Vec<(Vec<usize>, Vec<Link>, usize, usize)> = work_queue
+        let mut child_results: Vec<(Vec<usize>, BareEf, usize, usize)> = work_queue
             .into_par_iter()
             .map(|interval| {
                 let mut sampled = vec![];
@@ -375,70 +387,173 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                     &mut cdawg_nodes,
                     &mut cdawg_edges,
                 );
+                let links_ef = Link::links_to_ef(links);
+
                 let done = done.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
                 let total =
-                    total.fetch_add(links.len(), std::sync::atomic::Ordering::SeqCst) + links.len();
+                    total.fetch_add(links_ef.len(), std::sync::atomic::Ordering::SeqCst) + links_ef.len();
+                let ef_size = mem_dbg::MemSize::mem_size(&links_ef, mem_dbg::SizeFlags::default());
+                let ef_total =
+                    ef_total.fetch_add(ef_size, std::sync::atomic::Ordering::SeqCst) + ef_size;
+
                 eprintln!(
-                    "{done:>2}: Collected {total} links total, size {:.3} GB",
+                    "{done:>2}: Collected {} links, {total} total, EF {:.3} GB (total EF {:.3} GB; total flat {:.3})",
+                    links_ef.len(),
+                    ef_size as f32 / 1e9,
+                    ef_total as f32 / 1e9,
                     (total * std::mem::size_of::<Link>()) as f32 / 1e9,
                 );
-                (sampled, links, cdawg_nodes, cdawg_edges)
+
+                (sampled, links_ef, cdawg_nodes, cdawg_edges)
             })
             .collect();
-        for (_s, l, cn, ce) in child_results {
+
+        {
+            let mut links = links.into_iter().map(|l| l.key()).collect_vec();
+            links.sort();
+            links.dedup();
+            child_results.push((vec![], BareEf::from(links), 0, 0));
+        }
+
+        let mut num_vals = 0;
+        for (_s, ef, cn, ce) in &child_results {
+            num_vals += ef.len();
             // stpd_samples.extend(s);
-            links.extend(l);
             cdawg_nodes += cn;
             cdawg_edges += ce;
         }
 
+        let ef_links = {
+            eprintln!("Select pivots");
+            let mut pivot_idxs = (0..100)
+                .map(|_| rand::random_range(0..num_vals))
+                .collect_vec();
+            pivot_idxs.sort_unstable();
+            pivot_idxs.dedup();
+
+            let mut pivots = vec![];
+            {
+                let mut i = 0;
+                let mut pivot_idx_iter = pivot_idxs.iter();
+                let mut next_pivot = *pivot_idx_iter.next().unwrap();
+                'outer: for (_s, ef, _cn, _ce) in &child_results {
+                    for x in ef.iter() {
+                        if i == next_pivot {
+                            pivots.push(x);
+                            next_pivot = match pivot_idx_iter.next() {
+                                Some(&idx) => idx,
+                                None => break 'outer,
+                            };
+                        }
+                        i += 1;
+                    }
+                }
+                pivots.push(0);
+                pivots.push(u128::MAX);
+                pivots.sort_unstable();
+                pivots.dedup();
+            }
+            let mut efs_per_pivot = vec![vec![]; pivots.len()];
+            let mut max = 0u128;
+            eprintln!("Partitioning EFs");
+            for (_s, ef, _cn, _ce) in child_results {
+                if ef.len() == 0 {
+                    continue;
+                }
+                let vals = ef.iter().collect_vec();
+                max = max.max(*vals.last().unwrap());
+                let splits = pivots
+                    .iter()
+                    .map(|&p| vals.partition_point(|&x| x < p))
+                    .collect_vec();
+                for i in 0..pivots.len() - 1 {
+                    efs_per_pivot[i].push(BareEf::from(&vals[splits[i]..splits[i + 1]]));
+                }
+            }
+            eprintln!("Build an EF for each part");
+            let mut part_efs: Vec<BareEf> = efs_per_pivot
+                .into_par_iter()
+                .map(|efs| {
+                    eprintln!(
+                        "Merging {} EFs of total len {}",
+                        efs.len(),
+                        efs.iter().map(|ef| ef.len()).sum::<usize>()
+                    );
+                    let mut vals = vec![];
+                    for ef in efs {
+                        vals.extend(ef.iter());
+                    }
+                    eprintln!(
+                        "vals size: {} GB",
+                        std::mem::size_of_val(vals.as_slice()) as f32 / 1e9
+                    );
+                    vals.sort_unstable();
+                    vals.dedup();
+                    BareEf::from(vals)
+                })
+                .collect();
+            let n = part_efs.iter().map(|ef| ef.len()).sum();
+            eprintln!("Merge part EFs. Dedupped to {n} links");
+            let mut ef_builder = sux::dict::elias_fano::EliasFanoBuilder::<u128>::new(n, max);
+            for part_ef in &mut part_efs {
+                ef_builder.extend(part_ef.iter());
+            }
+            ef_builder.build_with_dict()
+        };
+
         eprintln!(
-            "Links: {:.3} GB",
-            std::mem::size_of_val(links.as_slice()) as f32 / 1e9
+            "EF Links: {:.3} GB (EF)",
+            mem_dbg::MemSize::mem_size(&ef_links, mem_dbg::SizeFlags::default()) as f32 / 1e9
         );
+
+        // eprintln!(
+        //     "Links: {:.3} GB",
+        //     std::mem::size_of_val(links.as_slice()) as f32 / 1e9
+        // );
 
         let State { t, sa: _sa, .. } = state;
 
-        use voracious_radix_sort::RadixSort;
-        stpd_samples.voracious_mt_sort(12);
-        // FIXME: THIS IS TERRIBLY SLOW FOR 12 BYTE DATA.
-        links.voracious_mt_sort(12);
+        // use voracious_radix_sort::RadixSort;
+        // stpd_samples.voracious_mt_sort(12);
+        // // FIXME: THIS IS TERRIBLY SLOW FOR 12 BYTE DATA.
+        // links.voracious_mt_sort(12);
 
         stpd_samples.dedup();
-        links.dedup();
+        // links.dedup();
         // Free the excess capacity.
-        links.shrink_to_fit();
-        eprintln!(
-            "Links: {:.3} GB (deduped)",
-            std::mem::size_of_val(links.as_slice()) as f32 / 1e9
-        );
+        // links.shrink_to_fit();
+        // eprintln!(
+        //     "Links: {:.3} GB (deduped)",
+        //     std::mem::size_of_val(links.as_slice()) as f32 / 1e9
+        // );
 
         eprintln!(
             "Max LCP: {}",
-            links.iter().map(|l| l.lcp()).max().unwrap_or(0)
+            ef_links
+                .iter()
+                .map(|l| Link::from_key(l).lcp())
+                .max()
+                .unwrap_or(0)
         );
 
-        let mut ef_builder =
-            sux::dict::elias_fano::EliasFanoBuilder::<u128>::new(links.len(), Link::MAX);
-
-        links.reverse();
-        for i in (0..links.len()).rev() {
-            ef_builder.push(links[i].key());
-            if i % (1 << 25) == 0 {
-                links.truncate(i);
-                links.shrink_to_fit();
-            }
-        }
         eprintln!(
             "Average LCP: {:.2}",
-            links.iter().map(|l| l.lcp()).sum::<usize>() as f32 / links.len() as f32
+            ef_links
+                .iter()
+                .map(|l| Link::from_key(l).lcp())
+                .sum::<usize>() as f32
+                / ef_links.len() as f32
         );
+
         {
             let mut c1 = 0;
             let mut c2 = 0;
             let mut c3 = 0;
             let mut c4 = 0;
-            let chunks = links.iter().chunk_by(|l| (l.source(), l.c()));
+            let chunks = ef_links.iter().chunk_by(|l| {
+                let l = Link::from_key(*l);
+                (l.source(), l.c())
+            });
             for group in chunks.into_iter().map(|(k, g)| (k, g.count())) {
                 c1 += (group.1 > 1) as usize;
                 c2 += (group.1 > 2) as usize;
@@ -450,11 +565,6 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
             eprintln!("Number of (pos,c) with >3 link: {c3}",);
             eprintln!("Number of (pos,c) with >4 link: {c4}",);
         }
-        let ef_links = ef_builder.build_with_dict();
-        eprintln!(
-            "Links: {:.3} GB (EF)",
-            mem_dbg::MemSize::mem_size(&ef_links, mem_dbg::SizeFlags::default()) as f32 / 1e9
-        );
 
         stpd_samples.sort_by(|&a, &b| cmp_colex(&t.as_ref()[..=a], &t.as_ref()[..=b]).1);
         let stpd_pi: Vec<u64> = stpd_samples.iter().map(|&x| pi[x] as u64).collect();
