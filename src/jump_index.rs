@@ -11,7 +11,7 @@ use crate::{
     rmq::{self, Rmq},
     sa_and_lcp,
     stpd::cmp_colex,
-    SaElem, LCP, SA, T,
+    SaElem, SA, T,
 };
 
 #[derive(Copy, Clone, PartialEq, PartialOrd, Eq, Ord, Debug)]
@@ -90,7 +90,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
 }
 impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
     pub fn new2<SAR: AsRef<SA> + Sync>(t: TR, sa: SAR, bwt: &T, lcp: &CompactLcp, pi: &SA) -> Self {
-        const PARALLEL_THRESHOLD: usize = 10_000_000;
+        const PARALLEL_THRESHOLD: usize = 100_000_000;
 
         struct State<'a, T, SA> {
             t: T,
@@ -98,7 +98,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
             sa: &'a SA,
             lcp: &'a CompactLcp,
             // run_boundaries: Vec<SaElem>,
-            lcp_rmq: rmq::BlockRmq<crate::LcpElem, 128>,
+            lcp_rmq: rmq::BlockRmq<crate::LcpElem, 32>,
             permuted_pi: &'a SA,
             pi_rmq: rmq::BlockRmq<SaElem, 128>,
         }
@@ -332,6 +332,8 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
         );
 
         eprintln!("Run on {} intervals!", work_queue.len());
+        let done = std::sync::atomic::AtomicUsize::new(0);
+        let total = std::sync::atomic::AtomicUsize::new(0);
         use rayon::prelude::*;
         let child_results: Vec<(Vec<usize>, Vec<Link>, usize, usize)> = work_queue
             .into_par_iter()
@@ -347,10 +349,12 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                     &mut cdawg_nodes,
                     &mut cdawg_edges,
                 );
+                let done = done.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                let total =
+                    total.fetch_add(links.len(), std::sync::atomic::Ordering::SeqCst) + links.len();
                 eprintln!(
-                    "Collected {} links, size {:.3} GB",
-                    links.len(),
-                    std::mem::size_of_val(links.as_slice()) as f32 / 1e9
+                    "{done:>2}: Collected {total} links total, size {:.3} GB",
+                    (total * std::mem::size_of::<Link>()) as f32 / 1e9,
                 );
                 (sampled, links, cdawg_nodes, cdawg_edges)
             })
@@ -374,9 +378,16 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
         );
         stpd_samples.dedup();
         links.dedup();
+        // Free the excess capacity.
+        links.shrink_to_fit();
         eprintln!(
             "Links: {:.3} GB (deduped)",
             std::mem::size_of_val(links.as_slice()) as f32 / 1e9
+        );
+
+        eprintln!(
+            "Max LCP: {}",
+            links.iter().map(|l| l.lcp()).max().unwrap_or(0)
         );
 
         stpd_samples.sort_by(|&a, &b| cmp_colex(&t.as_ref()[..=a], &t.as_ref()[..=b]).1);
