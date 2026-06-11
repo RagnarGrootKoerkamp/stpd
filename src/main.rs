@@ -333,7 +333,8 @@ fn main() {
     ]
     .concat();
     for t in texts {
-        stats(&t, false);
+        // stats(&t, false);
+        jump_index(&t.1);
     }
 
     // stats(&random(1000, 2), true);

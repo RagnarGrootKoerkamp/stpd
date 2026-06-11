@@ -126,13 +126,19 @@ pub struct JumpIndexStats {
 impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
     pub fn new(t: TR) -> Self {
         let (sa, lcp) = sa_and_lcp_cached(t.as_ref());
-        let bwt = &bwt(t.as_ref(), &sa);
+        let bwt = bwt(t.as_ref(), &sa);
         // let pi = (0..t.as_ref().len()).collect_vec();
-        Self::new2(t, sa, bwt, &lcp, &vec![])
+        Self::new2(t, sa, bwt, lcp, &vec![])
     }
 }
 impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
-    pub fn new2<SAR: AsRef<SA> + Sync>(t: TR, sa: SAR, bwt: &T, lcp: &CompactLcp, pi: &SA) -> Self {
+    pub fn new2(
+        t: TR,
+        sa: impl AsRef<SA> + Sync,
+        bwt: impl AsRef<T> + Sync,
+        lcp: impl AsRef<CompactLcp> + Sync,
+        pi: &SA,
+    ) -> Self {
         let n = t.as_ref().len();
         // eprintln!("SA: {:?}", sa.as_ref());
         // eprintln!(
@@ -198,11 +204,11 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
 
             let mut run_start = interval.start;
             for i in interval.clone() {
-                if i > 0 && bwt[i] != bwt[i - 1] {
+                if i > 0 && bwt.as_ref()[i] != bwt.as_ref()[i - 1] {
                     run_start = i;
                 }
 
-                let l = lcp.get(sa.as_ref(), i);
+                let l = lcp.as_ref().get(sa.as_ref(), i);
                 // eprintln!("{i} => {l}");
 
                 let mut last_start = i;
@@ -243,7 +249,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
         const PREFIX_LCP: u32 = 3;
         let intervals: Vec<usize> = (0..=n)
             .into_par_iter()
-            .filter(|&i| i == 0 || lcp.get(sa.as_ref(), i - 1) <= PREFIX_LCP)
+            .filter(|&i| i == 0 || lcp.as_ref().get(sa.as_ref(), i - 1) <= PREFIX_LCP)
             .collect();
         // eprintln!("intervals: {intervals:?}");
 
@@ -303,12 +309,12 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                 for end_idx in 1..intervals.len() {
                     let start = intervals[start_idx];
                     let end = intervals[end_idx];
-                    if lcp.get(sa.as_ref(), end - 1) < cur_lcp {
+                    if lcp.as_ref().get(sa.as_ref(), end - 1) < cur_lcp {
                         new_intervals.push(end);
                         new_anchors.push(link(
                             &anchors[start_idx..end_idx],
                             cur_lcp,
-                            bwt[start..end].iter().all_equal(),
+                            bwt.as_ref()[start..end].iter().all_equal(),
                             &mut links,
                             &mut cdawg_nodes,
                             &mut cdawg_edges,
@@ -324,7 +330,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
             let min = link(
                 &anchors,
                 0,
-                bwt.iter().all_equal(),
+                bwt.as_ref().iter().all_equal(),
                 &mut links,
                 &mut cdawg_nodes,
                 &mut cdawg_edges,
@@ -332,11 +338,19 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
             assert_eq!(sa.as_ref()[min], 0);
         }
         {
+            // Collect links from top layers.
             let mut links = links.into_iter().map(|l| l.key()).collect_vec();
             links.sort();
             links.dedup();
             dfs_results.push((0, BareEf::from(links), 0, 0));
         }
+
+        // Drop all support structures.
+        drop(bwt);
+        drop(lcp);
+        drop(sa);
+
+        // Collect all links
 
         let mut num_vals = 0;
         for (_a, ef, cn, ce) in &dfs_results {
@@ -359,7 +373,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
             );
 
             eprintln!("Select pivots");
-            const NUM_PIVOTS: usize = 40;
+            const NUM_PIVOTS: usize = 80;
             const OVERSAMPLING: usize = 100;
             // Oversample 100x to smoothen the distribution.
             let mut pivot_idxs = (0..NUM_PIVOTS * OVERSAMPLING)

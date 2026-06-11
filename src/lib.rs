@@ -128,7 +128,10 @@ pub fn sa_and_lcp_cached(t: &T) -> (SA, CompactLcp) {
     if cache_file.exists() {
         eprintln!("Loading from cache: {:?}", cache_file);
         let data = fs::read(&cache_file).unwrap();
-        return bincode::deserialize::<(SA, CompactLcp)>(&data).unwrap();
+        let (sa, lcp) = bincode::deserialize::<(SA, CompactLcp)>(&data).unwrap();
+        eprintln!("SA:   {:.3} GB", std::mem::size_of_val(sa.as_slice()) as f32 / 1e9);
+        eprintln!("CompactLCP: {:.3} GB", lcp.space() as f32 / 1e9);
+        return (sa, lcp);
     }
     
     // Compute SA and LCP
@@ -452,6 +455,26 @@ pub fn stpd(t: &T, _sa: &SA, _lcp: &CompactLcp, perm: &Vec<usize>) -> usize {
     // eprintln!("Suffix links:  {:?}", suffix_links.len());
     sampled.len()
 }
+
+pub fn jump_index(t: &T) -> usize {
+    let jump_index = jump_index::JumpIndex::new(t);
+
+    let JumpIndexStats { num_sampled, num_sources, num_source_chars, num_links, cdawg_nodes, cdawg_edges } = jump_index.stats();
+
+    #[allow(unused)]
+    let c = 1000000.;
+    let c = 1.;
+    eprint!(" {:>5.2}  | ", num_sampled as f32 / c);
+    eprint!(" {:>5.2}  | ", num_sources as f32 / c);
+    eprint!(" {:>5.2}  | ", num_source_chars as f32 / c);
+    eprint!(" {:>5.2}  | ", num_links as f32 / c);
+    eprint!(" {:>5.2}  | ", cdawg_nodes as f32 / c);
+    eprintln!(" {:>5.2}  | ", cdawg_edges as f32 / c);
+    // jump_index.space();
+    // jump_index.inspect_links();
+    num_sampled
+}
+
 
 pub fn stpd_fast(t: &T, sa: &SA, bwt: &T, lcp: &CompactLcp, pi: &SA) -> usize {
     let jump_index = jump_index::JumpIndex::new2(t, sa, bwt, lcp, pi);

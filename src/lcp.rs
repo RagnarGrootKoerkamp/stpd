@@ -11,6 +11,12 @@ pub struct CompactLcp {
     bits: sux::rank_sel::SelectAdaptConst<AddNumBits<BitVec>>,
 }
 
+impl AsRef<CompactLcp> for CompactLcp {
+    fn as_ref(&self) -> &CompactLcp {
+        self
+    }
+}
+
 impl CompactLcp {
     pub fn new(plcp: Vec<u32>) -> Self {
         // Encode plcp[i] - plcp[i-1] + 1 in (reverse) unary.
