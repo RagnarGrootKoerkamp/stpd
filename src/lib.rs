@@ -111,7 +111,8 @@ pub fn sa_and_lcp(t: &T) -> (SA, TheLcp) {
 
 pub fn sa_and_lcp_cached(t: &T) -> (SA, impl Lcp + use<>) {
     use std::collections::hash_map::DefaultHasher;
-    use std::fs;
+    use std::fs::{self, File};
+    use std::io::{BufReader, BufWriter};
     use std::path::Path;
 
     // Hash the input text
@@ -130,8 +131,9 @@ pub fn sa_and_lcp_cached(t: &T) -> (SA, impl Lcp + use<>) {
     // Try to load from cache
     if cache_file.exists() {
         eprintln!("Loading from cache: {:?}", cache_file);
-        let data = fs::read(&cache_file).unwrap();
-        let (sa, lcp) = bincode::deserialize::<(SA, TheLcp)>(&data).unwrap();
+        let file = File::open(&cache_file).unwrap();
+        let reader = BufReader::new(file);
+        let (sa, lcp) = bincode::deserialize_from::<_, (SA, TheLcp)>(reader).unwrap();
         eprintln!("SA:   {:.3} GB", std::mem::size_of_val(sa.as_slice()) as f32 / 1e9);
         eprintln!("{}: {:.3} GB", std::any::type_name::<TheLcp>(), lcp.space() as f32 / 1e9);
         return (sa, lcp);
@@ -142,7 +144,9 @@ pub fn sa_and_lcp_cached(t: &T) -> (SA, impl Lcp + use<>) {
     
     // Write to cache
     eprintln!("Writing to cache: {:?}", cache_file);
-    fs::write(&cache_file, bincode::serialize(&result).unwrap()).unwrap();
+    let file = File::create(&cache_file).unwrap();
+    let writer = BufWriter::new(file);
+    bincode::serialize_into(writer, &result).unwrap();
 
     result
 }
