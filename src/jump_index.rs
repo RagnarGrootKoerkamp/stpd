@@ -25,17 +25,6 @@ pub struct Link {
     // target: usize,
 }
 
-impl std::fmt::Debug for Link {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Link")
-            .field("source", &self.source())
-            .field("c", &self.c())
-            .field("lcp", &self.lcp())
-            .field("target", &self.target())
-            .finish()
-    }
-}
-
 const SOURCE_BITS: u32 = 31;
 const C_BITS: u32 = 8; // TODO: Reduce to 2
 const LCP_BITS: u32 = 22; // enough for reference genome
@@ -100,6 +89,17 @@ impl Link {
         links.voracious_sort();
         links.dedup();
         BareEf::from(links)
+    }
+}
+
+impl std::fmt::Debug for Link {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Link")
+            .field("source", &self.source())
+            .field("c", &self.c())
+            .field("lcp", &self.lcp())
+            .field("target", &self.target())
+            .finish()
     }
 }
 
@@ -177,11 +177,13 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                 let target = text_idx + lcp as usize;
                 // TODO: Why do we need this if statement?
                 if target < t.as_ref().len() {
+                    // sa[best] is HOT.
                     let source = sa.as_ref()[best] as usize + lcp as usize;
                     let c = t.as_ref()[target];
                     links.push(Link::new(
                         source,
                         c,
+                        // co_lcp is HOT.
                         co_lcp(&t.as_ref()[..source], &t.as_ref()[..target]),
                         target,
                     ));
