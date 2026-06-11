@@ -100,7 +100,11 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                         source,
                         c,
                         // co_lcp is HOT.
-                        co_lcp(&t.as_ref()[..source], &t.as_ref()[..target]),
+                        lcp as usize
+                            + lcs(
+                                &t.as_ref()[..source - lcp as usize],
+                                &t.as_ref()[..target - lcp as usize],
+                            ),
                         target,
                     ));
                 }
@@ -681,7 +685,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
     }
 }
 
-fn co_lcp(a: &[u8], b: &[u8]) -> usize {
+fn lcs(a: &[u8], b: &[u8]) -> usize {
     let min = a.len().min(b.len());
     for i in 0..min {
         if a[a.len() - 1 - i] != b[b.len() - 1 - i] {
