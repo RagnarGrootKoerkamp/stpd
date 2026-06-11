@@ -191,7 +191,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                     &mut cdawg_nodes,
                     &mut cdawg_edges,
                 );
-                let links_ef = link::Link::links_to_ef(links);
+                let links_ef = link::links_to_ef(links);
 
                 let done = done.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
                 let total =
@@ -439,6 +439,17 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
         eprintln!(
             "final EF size: {:.3} GB",
             mem_dbg::MemSize::mem_size(&ef_links, mem_dbg::SizeFlags::default()) as f32 / 1e9
+        );
+
+        eprintln!("splitting..");
+        let (ef_compact, ef_lcp) = link::links_to_compact_ef(&ef_links);
+        eprintln!(
+            "compact EF size: {:.3} GB",
+            mem_dbg::MemSize::mem_size(&ef_compact, mem_dbg::SizeFlags::default()) as f32 / 1e9
+        );
+        eprintln!(
+            "LCP EF size:     {:.3} GB",
+            mem_dbg::MemSize::mem_size(&ef_lcp, mem_dbg::SizeFlags::default()) as f32 / 1e9
         );
 
         // eprintln!(

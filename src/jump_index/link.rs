@@ -3,12 +3,12 @@ use sux::bits::BitVec;
 
 use sux::rank_sel::SelectZeroAdaptConst;
 
-use sux::dict::{EliasFano, EliasFanoBuilder};
+use sux::dict::{EfDict, EliasFano, EliasFanoBuilder};
 use voracious_radix_sort::RadixSort;
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub struct Link {
-    pub data: u128,
+    data: u128,
     // source: usize,
     // c: u8,
     // lcp: usize,
@@ -18,7 +18,7 @@ pub struct Link {
 /// Variant without LCP value, as most (src, c) only have 1 target anyway.
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub struct CompactLink {
-    pub data: u128,
+    data: u128,
     // source: usize,
     // c: u8,
     // target: usize,
@@ -34,7 +34,6 @@ pub type LinkEf = EliasFano<u128, SelectZeroAdaptConst<BitVec<Box<[usize]>>, Box
 pub type BareEf = EliasFano<u128>;
 
 impl Link {
-    // const MAX: u128 = (1 << LINK_BITS) - 1;
     pub fn from_key(data: u128) -> Self {
         Self { data }
     }
@@ -79,42 +78,56 @@ impl Link {
         (self.key() & ((1 << TARGET_BITS) - 1)) as usize
     }
 
-    pub fn links_to_ef(links: Vec<Link>) -> BareEf {
-        let mut links = links.into_iter().map(|l| l.key()).collect_vec();
-        links.voracious_sort();
-        links.dedup();
-        BareEf::from(links)
-    }
-
     pub fn compactify(&self) -> CompactLink {
         CompactLink::new(self.source(), self.c(), self.target())
     }
-
-    /// One EF with (src, c, target) with a single target per (src, c),
-    /// and a second one with all (src, c, lcp, target) (src, c) with additional targets.
-    pub fn links_to_compact_ef(links: Vec<Link>) -> (BareEf, BareEf) {
-        let num_sources = links.chunk_by(|x, y| x.source_c() == y.source_c()).count();
-        let mut links = links.into_iter().map(|l| l.key()).collect_vec();
-        links.voracious_sort();
-        links.dedup();
-
-        let u_full = *links.last().unwrap();
-        let u_compact = Link::from_key(u_full).compactify().key();
-        let mut ef_compact = EliasFanoBuilder::new(num_sources, u_compact);
-        let mut ef_full = EliasFanoBuilder::new(links.len() - num_sources, u_full);
-
-        for chunk in
-            links.chunk_by(|x, y| Link::from_key(*x).source_c() == Link::from_key(*y).source_c())
-        {
-            ef_compact.push(Link::from_key(chunk[0]).compactify().key());
-            for &link in &chunk[1..] {
-                ef_full.push(link);
-            }
-        }
-        (ef_compact.build(), ef_full.build())
-    }
 }
 
+pub fn links_to_ef(links: Vec<Link>) -> BareEf {
+    for link in &links {
+        Link::from_key(link.key());
+    }
+    let mut links = links.into_iter().map(|l| l.key()).collect_vec();
+    links.voracious_sort();
+    links.dedup();
+    // test last element
+    if let Some(last) = links.last() {
+        Link::from_key(*last);
+    }
+    BareEf::from(links)
+}
+
+/// One EF with (src, c, target) with a single target per (src, c),
+/// and a second one with all (src, c, lcp, target) (src, c) with additional targets.
+pub fn links_to_compact_ef(links: &EfDict<u128>) -> (BareEf, BareEf) {
+    eprintln!("counting (src,c) ..");
+    let num_sources = links
+        .iter()
+        .chunk_by(|x| Link::from_key(*x).source_c())
+        .into_iter()
+        .count();
+
+    let last_key = Link::from_key(links.iter_back().next().unwrap());
+    let last_key_compact = last_key.compactify();
+    let mut ef_compact = EliasFanoBuilder::new(num_sources, last_key_compact.key());
+    let mut ef_lcp = EliasFanoBuilder::new(links.len() - num_sources, last_key.key());
+
+    eprintln!("building ..");
+    for (_len, mut chunk) in links
+        .iter()
+        .map(|x| Link::from_key(x))
+        .chunk_by(|l| l.source_c())
+        .into_iter()
+    {
+        let link = chunk.next().unwrap();
+        let clink = link.compactify();
+        ef_compact.push(clink.key());
+        for link in chunk {
+            ef_lcp.push(link.key());
+        }
+    }
+    (ef_compact.build(), ef_lcp.build())
+}
 impl std::fmt::Debug for Link {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Link")
@@ -127,10 +140,6 @@ impl std::fmt::Debug for Link {
 }
 
 impl CompactLink {
-    // const MAX: u128 = (1 << LINK_BITS) - 1;
-    pub fn from_key(data: u128) -> Self {
-        Self { data }
-    }
     pub fn new(source: usize, c: u8, target: usize) -> Self {
         assert!(LINK_BITS <= 128);
         assert!(source < (1 << SOURCE_BITS), "link {source},{c} -> {target}");
@@ -150,6 +159,7 @@ impl CompactLink {
     pub fn source(&self) -> usize {
         ((self.key() >> (C_BITS + TARGET_BITS)) & ((1 << SOURCE_BITS) - 1)) as usize
     }
+    #[allow(unused)]
     pub fn source_c(&self) -> usize {
         ((self.key() >> TARGET_BITS) & ((1 << (SOURCE_BITS + C_BITS)) - 1)) as usize
     }
@@ -158,15 +168,6 @@ impl CompactLink {
     }
     pub fn target(&self) -> usize {
         (self.key() & ((1 << TARGET_BITS) - 1)) as usize
-    }
-
-    /// Store all values 'mirrored': `u-x` for x from large to small,
-    /// where `u` is the largest element.
-    pub fn links_to_ef(links: Vec<Link>) -> BareEf {
-        let mut links = links.into_iter().map(|l| l.key()).collect_vec();
-        links.voracious_sort();
-        links.dedup();
-        BareEf::from(links)
     }
 }
 
