@@ -1,4 +1,5 @@
 use itertools::Itertools;
+use link::Link;
 use std::{
     cmp::Ordering::{Greater, Less},
     marker::Sync,
@@ -16,92 +17,7 @@ use crate::{
     SA, T,
 };
 
-#[derive(Copy, Clone, PartialEq, Eq)]
-pub struct Link {
-    data: u128,
-    // source: usize,
-    // c: u8,
-    // lcp: usize,
-    // target: usize,
-}
-
-const SOURCE_BITS: u32 = 31;
-const C_BITS: u32 = 8; // TODO: Reduce to 2
-const LCP_BITS: u32 = 22; // enough for reference genome
-const TARGET_BITS: u32 = 31; // enough for reference genome
-const LINK_BITS: u32 = SOURCE_BITS + C_BITS + LCP_BITS + TARGET_BITS;
-
-type LinkEf = EliasFano<u128, SelectZeroAdaptConst<BitVec<Box<[usize]>>, Box<[usize]>, 12, 3>>;
-type BareEf = EliasFano<u128>;
-
-impl Link {
-    // const MAX: u128 = (1 << LINK_BITS) - 1;
-    fn from_key(data: u128) -> Self {
-        Self { data }
-    }
-    fn new(source: usize, c: u8, lcp: usize, target: usize) -> Self {
-        assert!(LINK_BITS <= 128);
-        assert!(
-            source < (1 << SOURCE_BITS) as usize,
-            "link {source},{c} -> {lcp},{target}"
-        );
-        assert!(
-            (c as usize) < (1 << C_BITS),
-            "link {source},{c} -> {lcp},{target}"
-        );
-        assert!(
-            lcp < (1 << LCP_BITS) as usize,
-            "link {source},{c} -> {lcp},{target}"
-        );
-        assert!(
-            target < (1 << TARGET_BITS) as usize,
-            "link {source},{c} -> {lcp},{target}"
-        );
-        let data = ((source as u128) << (C_BITS + LCP_BITS + TARGET_BITS))
-            | ((c as u128) << (LCP_BITS + TARGET_BITS))
-            | ((lcp as u128) << TARGET_BITS)
-            | (target as u128);
-        Self { data }
-    }
-    fn key(&self) -> u128 {
-        self.data
-    }
-    fn source(&self) -> usize {
-        ((self.key() >> (C_BITS + LCP_BITS + TARGET_BITS)) & ((1 << SOURCE_BITS) - 1)) as usize
-    }
-    fn source_c(&self) -> usize {
-        ((self.key() >> (LCP_BITS + TARGET_BITS)) & ((1 << (SOURCE_BITS + C_BITS)) - 1)) as usize
-    }
-    fn c(&self) -> u8 {
-        ((self.key() >> (LCP_BITS + TARGET_BITS)) & ((1 << C_BITS) - 1)) as u8
-    }
-    fn lcp(&self) -> usize {
-        ((self.key() >> TARGET_BITS) & ((1 << LCP_BITS) - 1)) as usize
-    }
-    fn target(&self) -> usize {
-        (self.key() & ((1 << TARGET_BITS) - 1)) as usize
-    }
-
-    /// Store all values 'mirrored': `u-x` for x from large to small,
-    /// where `u` is the largest element.
-    fn links_to_ef(links: Vec<Link>) -> BareEf {
-        let mut links = links.into_iter().map(|l| l.key()).collect_vec();
-        links.voracious_sort();
-        links.dedup();
-        BareEf::from(links)
-    }
-}
-
-impl std::fmt::Debug for Link {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Link")
-            .field("source", &self.source())
-            .field("c", &self.c())
-            .field("lcp", &self.lcp())
-            .field("target", &self.target())
-            .finish()
-    }
-}
+mod link;
 
 pub struct JumpIndex<TR: AsRef<T>> {
     pub t: TR,
@@ -109,7 +25,7 @@ pub struct JumpIndex<TR: AsRef<T>> {
     pub stpd_pi: Vec<u64>,
     pub stpd_rmq: rmq::BlockRmq<u64, 64>,
     // TODO: Predecessor structure
-    pub ef_links: LinkEf,
+    pub ef_links: link::LinkEf,
     pub cdawg_nodes: usize,
     pub cdawg_edges: usize,
 }
@@ -159,7 +75,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
         let link = |anchors: &[usize],
                     lcp: u32,
                     single_run: bool,
-                    links: &mut Vec<Link>,
+                    links: &mut Vec<link::Link>,
                     cdawg_nodes: &mut usize,
                     cdawg_edges: &mut usize|
          -> usize {
@@ -180,7 +96,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                     // sa[best] is HOT.
                     let source = sa.as_ref()[best] as usize + lcp as usize;
                     let c = t.as_ref()[target];
-                    links.push(Link::new(
+                    links.push(link::Link::new(
                         source,
                         c,
                         // co_lcp is HOT.
@@ -198,7 +114,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
         // Discovers child intervals and endpoints on-the-fly during linear scan.
         //
         let dfs2 = |interval: Range<usize>,
-                    links: &mut Vec<Link>,
+                    links: &mut Vec<link::Link>,
                     cdawg_nodes: &mut usize,
                     cdawg_edges: &mut usize|
          -> usize {
@@ -262,7 +178,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
         let total = std::sync::atomic::AtomicUsize::new(0);
         let ef_total = std::sync::atomic::AtomicUsize::new(0);
         use rayon::prelude::*;
-        let mut dfs_results: Vec<(usize, BareEf, usize, usize)> = intervals
+        let mut dfs_results: Vec<(usize, link::BareEf, usize, usize)> = intervals
             .par_array_windows()
             // .array_windows()
             .map(|&[start, end]| {
@@ -275,7 +191,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                     &mut cdawg_nodes,
                     &mut cdawg_edges,
                 );
-                let links_ef = Link::links_to_ef(links);
+                let links_ef = link::Link::links_to_ef(links);
 
                 let done = done.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
                 let total =
@@ -296,7 +212,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
             })
             .collect();
 
-        let mut links: Vec<Link> = vec![];
+        let mut links: Vec<link::Link> = vec![];
         let mut cdawg_nodes = 1; // the final node
         let mut cdawg_edges = 0;
         // Process the top few layers.
@@ -346,7 +262,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
             let mut links = links.into_iter().map(|l| l.key()).collect_vec();
             links.sort();
             links.dedup();
-            dfs_results.push((0, BareEf::from(links), 0, 0));
+            dfs_results.push((0, link::BareEf::from(links), 0, 0));
         }
 
         // Drop all support structures.
@@ -416,7 +332,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                 pivots.dedup();
             }
 
-            let efs_per_pivot: Vec<std::sync::Mutex<Vec<BareEf>>> = (0..pivots.len())
+            let efs_per_pivot: Vec<std::sync::Mutex<Vec<link::BareEf>>> = (0..pivots.len())
                 .map(|_| std::sync::Mutex::new(vec![]))
                 .collect();
             let max = std::sync::Mutex::new(0u128);
@@ -435,7 +351,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                     .map(|&p| vals.partition_point(|&x| x < p))
                     .collect_vec();
                 for i in 0..pivots.len() - 1 {
-                    let bare_ef = BareEf::from(&vals[splits[i]..splits[i + 1]]);
+                    let bare_ef = link::BareEf::from(&vals[splits[i]..splits[i + 1]]);
                     efs_per_pivot[i].lock().unwrap().push(bare_ef);
                 }
             });
@@ -455,7 +371,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
             );
 
             eprintln!("Build an EF for each part");
-            let part_efs: Vec<(u128, BareEf)> = efs_per_pivot
+            let part_efs: Vec<(u128, link::BareEf)> = efs_per_pivot
                 .into_par_iter()
                 .enumerate()
                 .map(|(i, efs)| {
@@ -487,7 +403,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                     for x in &mut *vals {
                         *x -= min;
                     }
-                    let out = BareEf::from(vals);
+                    let out = link::BareEf::from(vals);
                     eprintln!(
                         "{i}: output EF size: {:.3} GB",
                         mem_dbg::MemSize::mem_size(&out, mem_dbg::SizeFlags::default()) as f32
@@ -570,7 +486,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
             let mut c3 = 0;
             let mut c4 = 0;
             let chunks = ef_links.iter().chunk_by(|l| {
-                let l = Link::from_key(*l);
+                let l = link::Link::from_key(*l);
                 (l.source(), l.c())
             });
             for group in chunks.into_iter().map(|(k, g)| (k, g.count())) {
@@ -604,7 +520,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
         let mut stpd_samples: Vec<usize> = self
             .ef_links
             .iter()
-            .map(|l| Link::from_key(l).target())
+            .map(|l| link::Link::from_key(l).target())
             .collect();
         stpd_samples.voracious_mt_sort(12);
         stpd_samples.dedup();
@@ -614,13 +530,17 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                 .ef_links
                 .iter()
                 .tuple_windows()
-                .filter(|&(a, b)| Link::from_key(a).source() != Link::from_key(b).source())
+                .filter(|&(a, b)| {
+                    link::Link::from_key(a).source() != link::Link::from_key(b).source()
+                })
                 .count(),
             num_source_chars: 1 + self
                 .ef_links
                 .iter()
                 .tuple_windows()
-                .filter(|&(a, b)| Link::from_key(a).source_c() != Link::from_key(b).source_c())
+                .filter(|&(a, b)| {
+                    link::Link::from_key(a).source_c() != link::Link::from_key(b).source_c()
+                })
                 .count(),
             num_links: 1 + self
                 .ef_links
@@ -734,8 +654,11 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                 continue;
             }
 
-            let (_idx, link) = self.ef_links.succ(&Link::new(pos, c, i, 0).key()).unwrap();
-            let link = Link::from_key(link);
+            let (_idx, link) = self
+                .ef_links
+                .succ(&link::Link::new(pos, c, i, 0).key())
+                .unwrap();
+            let link = link::Link::from_key(link);
             // eprintln!("pos {pos} link {link:?}");
             if link.source() == pos && link.c() as u8 == c {
                 pos = link.target() + 1;
