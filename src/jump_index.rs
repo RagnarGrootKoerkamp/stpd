@@ -9,7 +9,7 @@ use voracious_radix_sort::RadixSort;
 
 use crate::{
     bwt,
-    lcp::CompactLcp,
+    lcp::Lcp,
     rmq::{self, Rmq},
     sa_and_lcp_cached,
     stpd::cmp_colex,
@@ -130,13 +130,14 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
         // let pi = (0..t.as_ref().len()).collect_vec();
         Self::new2(t, sa, bwt, lcp, &vec![])
     }
-}
-impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
-    pub fn new2(
+
+    /// Take an already-built SA, BWT, and LCP.
+    ///
+    pub fn new2<L: Lcp + Sync>(
         t: TR,
         sa: impl AsRef<SA> + Sync,
         bwt: impl AsRef<T> + Sync,
-        lcp: impl AsRef<CompactLcp> + Sync,
+        lcp: impl AsRef<L> + Sync,
         pi: &SA,
     ) -> Self {
         let n = t.as_ref().len();
@@ -247,6 +248,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
         };
 
         const PREFIX_LCP: u32 = 3;
+        eprintln!("Collecting intervals with LCP > {PREFIX_LCP}");
         let intervals: Vec<usize> = (0..=n)
             .into_par_iter()
             .filter(|&i| i == 0 || lcp.as_ref().get(sa.as_ref(), i - 1) <= PREFIX_LCP)

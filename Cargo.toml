@@ -25,3 +25,4 @@ simd-minimizers = "1.1.0"
 sux = { version = "0.14.0", features = ["serde"] }
 tiered-vector = "1.0.1"
 voracious_radix_sort = { version = "1.2.0", features = ["voracious_multithread"] }
+prefetch-index = "0.2.0"

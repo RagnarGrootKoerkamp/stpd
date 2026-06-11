@@ -1348,6 +1348,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "prefetch-index"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ebb824f21ee853524f9f04d24a8d2127de8a371ece8777ce848be7b49ccfd49f"
+
+[[package]]
 name = "prettyplease"
 version = "0.2.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1832,7 +1838,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.2",
  "once_cell",
  "rustix",
  "windows-sys",
@@ -1851,6 +1857,7 @@ dependencies = [
  "mem_dbg 0.4.2",
  "needletail",
  "packed-seq",
+ "prefetch-index",
  "ragc-core",
  "rand 0.9.2",
  "rayon",

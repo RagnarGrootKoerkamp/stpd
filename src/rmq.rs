@@ -1,7 +1,7 @@
 #![allow(unused)]
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
-use crate::{lcp::CompactLcp, SaElem, SA};
+use crate::{lcp::{CompactLcp, Lcp}, SaElem, SA};
 
 pub trait RmqElem: Copy + Ord + std::fmt::Debug + Send + Sync {
     const MAX: Self;
@@ -36,7 +36,7 @@ impl<T: Copy + Sync + Send> Data<T> for &[T] {
         self[idx]
     }
 }
-impl Data<u32> for (&SA, &CompactLcp) {
+impl<L: Lcp> Data<u32> for (&SA, &L) {
     fn lenn(self) -> usize {
         self.0.len()
     }
