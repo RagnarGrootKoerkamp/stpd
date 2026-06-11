@@ -24,10 +24,10 @@ pub struct CompactLink {
     // target: usize,
 }
 
-pub const SOURCE_BITS: u32 = 31;
+pub const SOURCE_BITS: u32 = 32;
 pub const C_BITS: u32 = 8; // TODO: Reduce to 2
 pub const LCP_BITS: u32 = 22; // enough for reference genome
-pub const TARGET_BITS: u32 = 31; // enough for reference genome
+pub const TARGET_BITS: u32 = 32; // enough for reference genome
 pub const LINK_BITS: u32 = SOURCE_BITS + C_BITS + LCP_BITS + TARGET_BITS;
 
 pub type LinkEf = EliasFano<u128, SelectZeroAdaptConst<BitVec<Box<[usize]>>, Box<[usize]>, 12, 3>>;
@@ -41,21 +41,19 @@ impl Link {
     pub fn new(source: usize, c: u8, lcp: usize, target: usize) -> Self {
         assert!(LINK_BITS <= 128);
         assert!(
-            source < (1 << SOURCE_BITS) as usize,
+            source < (1 << SOURCE_BITS),
             "link {source},{c} -> {lcp},{target}"
         );
         assert!(
             (c as usize) < (1 << C_BITS),
             "link {source},{c} -> {lcp},{target}"
         );
+        assert!(lcp < (1 << LCP_BITS), "link {source},{c} -> {lcp},{target}");
         assert!(
-            lcp < (1 << LCP_BITS) as usize,
+            target < (1 << TARGET_BITS),
             "link {source},{c} -> {lcp},{target}"
         );
-        assert!(
-            target < (1 << TARGET_BITS) as usize,
-            "link {source},{c} -> {lcp},{target}"
-        );
+
         let data = ((source as u128) << (C_BITS + LCP_BITS + TARGET_BITS))
             | ((c as u128) << (LCP_BITS + TARGET_BITS))
             | ((lcp as u128) << TARGET_BITS)
@@ -135,18 +133,12 @@ impl CompactLink {
     }
     pub fn new(source: usize, c: u8, target: usize) -> Self {
         assert!(LINK_BITS <= 128);
-        assert!(
-            source < (1 << SOURCE_BITS) as usize,
-            "link {source},{c} -> {target}"
-        );
+        assert!(source < (1 << SOURCE_BITS), "link {source},{c} -> {target}");
         assert!(
             (c as usize) < (1 << C_BITS),
             "link {source},{c} -> {target}"
         );
-        assert!(
-            target < (1 << TARGET_BITS) as usize,
-            "link {source},{c} -> {target}"
-        );
+        assert!(target < (1 << TARGET_BITS), "link {source},{c} -> {target}");
         let data = ((source as u128) << (C_BITS + TARGET_BITS))
             | ((c as u128) << (TARGET_BITS))
             | (target as u128);
