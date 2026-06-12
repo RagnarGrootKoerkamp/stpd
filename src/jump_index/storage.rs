@@ -1,3 +1,4 @@
+#![cfg(feature = "mphf")]
 use std::cmp::max;
 
 use itertools::Itertools;

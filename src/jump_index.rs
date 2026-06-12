@@ -454,12 +454,13 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
             eprintln!("compact EF without LCP: {}", print_ef(&compact_links));
         }
         eprintln!("---");
+        #[cfg(feature = "mphf")]
         {
             eprintln!("MphfStore.. (dropping (source,c) completely)");
             let store = storage::MphfStore::new(&ef_links);
             eprintln!("{}", store.size());
+            eprintln!("---");
         }
-        eprintln!("---");
 
         // eprintln!(
         //     "Links: {:.3} GB",
@@ -766,3 +767,11 @@ where
     let l = ef.num_lower_bits();
     format!("{:.3} GB : {n} * (2 + {l}) bits", gbs(ef))
 }
+
+// fn build_ef(vals: &[u128]) -> EliasFanoConcurrentBuilder<u64> {
+//     let builder = EliasFanoConcurrentBuilder::new(vals.len(), *vals.last().unwrap());
+//     vals.par_iter().enumerate().for_each(|(i, &v)| {
+//         builder.set(i, v);
+//     });
+//     builder
+// }
