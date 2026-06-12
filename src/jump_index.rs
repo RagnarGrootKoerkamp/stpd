@@ -441,6 +441,9 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
         eprintln!("---");
         eprintln!("final EF size: {}", print_ef(&ef_links));
         eprintln!("---");
+        let compact_links = link::compactify(&ef_links);
+        eprintln!("compact EF without LCP: {}", print_ef(&compact_links));
+        eprintln!("---");
         eprintln!("splitting.. (drop 1 LCP per (source, c))");
         let (ef_compact, ef_lcp) = link::links_to_compact_ef(&ef_links);
         eprintln!("compact EF size: {}", print_ef(&ef_compact));

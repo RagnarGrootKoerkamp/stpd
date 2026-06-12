@@ -100,7 +100,6 @@ pub fn links_to_ef(links: Vec<Link>) -> BareEf {
 /// One EF with (src, c, target) with a single target per (src, c),
 /// and a second one with all (src, c, lcp, target) (src, c) with additional targets.
 pub fn links_to_compact_ef(links: &EfDict<u128>) -> (BareEf, BareEf) {
-    eprintln!("counting (src,c) ..");
     let num_sources = links
         .iter()
         .chunk_by(|x| Link::from_key(*x).source_c())
@@ -112,10 +111,9 @@ pub fn links_to_compact_ef(links: &EfDict<u128>) -> (BareEf, BareEf) {
     let mut ef_compact = EliasFanoBuilder::new(num_sources, last_key_compact.key());
     let mut ef_lcp = EliasFanoBuilder::new(links.len() - num_sources, last_key.key());
 
-    eprintln!("building ..");
     for (_len, mut chunk) in links
         .iter()
-        .map(|x| Link::from_key(x))
+        .map(Link::from_key)
         .chunk_by(|l| l.source_c())
         .into_iter()
     {
@@ -128,6 +126,21 @@ pub fn links_to_compact_ef(links: &EfDict<u128>) -> (BareEf, BareEf) {
     }
     (ef_compact.build(), ef_lcp.build())
 }
+
+/// Drop LCP values
+pub fn compactify(links: &EfDict<u128>) -> BareEf {
+    let last_key = Link::from_key(links.iter_back().next().unwrap());
+    let last_key_compact = last_key.compactify();
+
+    let mut ef_compact = EliasFanoBuilder::new(links.len(), last_key_compact.key());
+
+    for link in links.iter().map(Link::from_key) {
+        let clink = link.compactify();
+        ef_compact.push(clink.key());
+    }
+    ef_compact.build()
+}
+
 impl std::fmt::Debug for Link {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Link")
