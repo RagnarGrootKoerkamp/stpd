@@ -466,20 +466,22 @@ pub fn stpd(t: &T, _sa: &SA, _lcp: &impl Lcp, perm: &Vec<usize>) -> usize {
 pub fn jump_index(t: &T) {
     let jump_index = jump_index::JumpIndex::new(t);
 
-    let JumpIndexStats { num_sampled, num_sources, num_source_chars, num_links, cdawg_nodes, cdawg_edges } = jump_index.stats();
+    // let JumpIndexStats { num_sampled, num_sources, num_source_chars, num_links, cdawg_nodes, cdawg_edges } = jump_index.stats();
 
-    #[allow(unused)]
-    let c = 1000000.;
-    let c = 1.;
-    eprint!(" {:>5.2}  | ", num_sampled as f32 / c);
-    eprint!(" {:>5.2}  | ", num_sources as f32 / c);
-    eprint!(" {:>5.2}  | ", num_source_chars as f32 / c);
-    eprint!(" {:>5.2}  | ", num_links as f32 / c);
-    eprint!(" {:>5.2}  | ", cdawg_nodes as f32 / c);
-    eprintln!(" {:>5.2}  | ", cdawg_edges as f32 / c);
+    // #[allow(unused)]
+    // let c = 1000000.;
+    // let c = 1.;
+    // eprint!(" {:>5.2}  | ", num_sampled as f32 / c);
+    // eprint!(" {:>5.2}  | ", num_sources as f32 / c);
+    // eprint!(" {:>5.2}  | ", num_source_chars as f32 / c);
+    // eprint!(" {:>5.2}  | ", num_links as f32 / c);
+    // eprint!(" {:>5.2}  | ", cdawg_nodes as f32 / c);
+    // eprintln!(" {:>5.2}  | ", cdawg_edges as f32 / c);
 
-    eprintln!("\nTesting mapping");
+    eprintln!("Testing mapping");
     jump_index.test_map();
+    eprintln!("Bench PML");
+    jump_index.bench_pml();
 
 }
 

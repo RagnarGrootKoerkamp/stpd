@@ -640,10 +640,15 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
     }
 
     /// Returns the position in the text of the longest prefix of the pattern that matches.
-    pub fn map_jump(&self, pattern: &[u8]) -> Range<usize> {
+    /// Also returns the total number of jumps.
+    pub fn map_jump(&self, pattern: &[u8]) -> (Range<usize>, usize) {
         // eprintln!("searching for {pattern:?}");
         let mut pos = 0;
+        let mut jumps = 0;
         for (i, &c) in pattern.iter().enumerate() {
+            if pos == self.t.as_ref().len() {
+                return (pos - i..pos, jumps);
+            }
             if self.t.as_ref()[pos] == c {
                 pos += 1;
                 continue;
@@ -654,22 +659,40 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
             // );
 
             // find the first link at (pos, c) with LCP >= i.
-            let (_idx, link) = self
-                .ef_links
-                .succ(&link::Link::new(pos, c, i, 0).key())
-                .unwrap();
+            let Some((_idx, link)) = self.ef_links.succ(&link::Link::new(pos, c, i, 0).key())
+            else {
+                // key was larger than last link
+                return (pos - i..pos, jumps);
+            };
             let link = link::Link::from_key(link);
             // eprintln!("pos {pos} link {link:?}");
             if link.source() == pos && link.c() as u8 == c {
                 // eprintln!("link: {link:?}");
+                jumps += 1;
                 pos = link.target() + 1;
             } else {
                 // eprintln!("no link found; next is {link:?}");
-                return pos - i..pos;
+                return (pos - i..pos, jumps);
             }
         }
         // eprintln!("Pattern found at {}", pos-pattern.len());
-        pos - pattern.len()..pos
+        (pos - pattern.len()..pos, jumps)
+    }
+
+    /// Pseudo matching lengths.
+    /// Repeatedly greedily matches a longest prefix of the remaining pattern.
+    pub fn map_pml(&self, pattern: &[u8]) -> (usize, usize) {
+        let mut start = 0;
+        let mut parts = 0;
+        let mut jumps = 0;
+        while start < pattern.len() {
+            let (range, js) = self.map_jump(&pattern[start..]);
+            start += range.len();
+            parts += 1;
+            jumps += js;
+        }
+        assert_eq!(start, pattern.len());
+        (parts, jumps)
     }
 
     /// Take a bunch of random substrings and map them against the text.
@@ -681,11 +704,54 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
             let i = rand::random_range(0..=self.t.as_ref().len() - len);
             let j = i + len;
             let pattern = &self.t.as_ref()[i..j];
-            let p1 = self.map_jump(pattern);
+            let p1 = self.map_jump(pattern).0;
             assert!(p1.len() == pattern.len(), "substring {i}..{j} not found");
             let pos = p1.start;
             assert!(pos <= i, "substring {i}..{j} found at pos {pos}");
             // eprintln!("substring {i}..{j} found at pos {pos}");
+        }
+    }
+
+    /// Take a bunch of random substrings and map them against the text.
+    pub fn bench_pml(&self) {
+        let cnt = 10000;
+        let len = 1..5000;
+
+        for rate in [0.01, 0.001] {
+            let mut patterns = vec![];
+            for it in 0..cnt {
+                let len = rand::random_range(len.clone());
+                let i = rand::random_range(0..=self.t.as_ref().len() - len);
+                let j = i + len;
+                let mut pattern = self.t.as_ref()[i..j].to_vec();
+                // randomly permute 1% of values.
+                for _ in 0..(len as f32 * rate) as usize {
+                    let idx = rand::random_range(0..len);
+                    pattern[idx] = (pattern[idx] + rand::random::<u8>() % 3) % 4;
+                }
+                patterns.push(pattern);
+            }
+            let start = std::time::Instant::now();
+            let mut parts = 0;
+            let mut jumps = 0;
+            for (it, pattern) in patterns.iter().enumerate() {
+                let (ps, js) = self.map_pml(&pattern);
+                parts += ps;
+                jumps += js;
+            }
+            let dur = start.elapsed();
+            let avg_part_len =
+                patterns.iter().map(|p| p.len()).sum::<usize>() as f32 / parts as f32;
+            let avg_jump_dist =
+                patterns.iter().map(|p| p.len()).sum::<usize>() as f32 / jumps as f32;
+            let avg_jumps_per_part = jumps as f32 / parts as f32;
+            eprintln!(
+                "PML: {:.3} for {} reads of average length 2500 with {:4.2}% errors. Avg {:6.0} reads/sec. Avg part len: {avg_part_len:6.1}, avg jump dist: {avg_jump_dist:6.1}, avg jumps/part: {avg_jumps_per_part:6.2}",
+            dur.as_secs_f32(),
+            cnt,
+                rate*100.,
+            cnt as f32 / dur.as_secs_f32(),
+        );
         }
     }
 }
@@ -741,12 +807,12 @@ mod test {
                 let p1 = ji.map_stpd(pattern);
                 t1 += s.elapsed();
                 let s = std::time::Instant::now();
-                let p2 = ji.map_jump(pattern);
+                let p2 = ji.map_jump(pattern).0.start;
                 t2 += s.elapsed();
                 eprintln!("p1: {p1:?}");
                 eprintln!("p2: {p2:?}");
                 let p1 = p1.unwrap();
-                let p2 = p2.start;
+                let p2 = p2;
 
                 assert_eq!(&t[p1..p1 + len], pattern);
                 assert_eq!(&t[p2..p2 + len], pattern);
