@@ -1,17 +1,12 @@
 use itertools::Itertools;
-use link::{BareEf, Link};
+use link::Link;
 use mem_dbg::MemSize;
 use std::{
     cmp::Ordering::{Greater, Less},
     marker::Sync,
     ops::Range,
 };
-use sux::{
-    bits::BitVec,
-    dict::{EliasFano, EliasFanoConcurrentBuilder},
-    rank_sel::SelectZeroAdaptConst,
-    traits::{IndexedDict, IndexedSeq, Succ},
-};
+use sux::{dict::EliasFano, traits::Succ};
 use voracious_radix_sort::RadixSort;
 
 use crate::{
@@ -442,46 +437,27 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
         eprintln!("---");
         eprintln!("final EF size: {}", print_ef(&ef_links));
         eprintln!("---");
-        {
-            eprintln!("splitting.. (drop 1 LCP per (source, c))");
-            let (ef_compact, ef_lcp) = link::links_to_compact_ef(&ef_links);
-            eprintln!("compact EF size: {}", print_ef(&ef_compact));
-            eprintln!("LCP EF size:     {}", print_ef(&ef_lcp));
-        }
-        eprintln!("---");
-        {
-            let compact_links = link::compactify(&ef_links);
-            eprintln!("compact EF without LCP: {}", print_ef(&compact_links));
-        }
-        eprintln!("---");
-        #[cfg(feature = "mphf")]
-        {
-            eprintln!("MphfStore.. (dropping (source,c) completely)");
-            let store = storage::MphfStore::new(&ef_links);
-            eprintln!("{}", store.size());
+        if false {
+            {
+                eprintln!("splitting.. (drop 1 LCP per (source, c))");
+                let (ef_compact, ef_lcp) = link::links_to_compact_ef(&ef_links);
+                eprintln!("compact EF size: {}", print_ef(&ef_compact));
+                eprintln!("LCP EF size:     {}", print_ef(&ef_lcp));
+            }
             eprintln!("---");
+            {
+                let compact_links = link::compactify(&ef_links);
+                eprintln!("compact EF without LCP: {}", print_ef(&compact_links));
+            }
+            eprintln!("---");
+            #[cfg(feature = "mphf")]
+            {
+                eprintln!("MphfStore.. (dropping (source,c) completely)");
+                let store = storage::MphfStore::new(&ef_links);
+                eprintln!("{}", store.size());
+                eprintln!("---");
+            }
         }
-
-        // eprintln!(
-        //     "Links: {:.3} GB",
-        //     std::mem::size_of_val(links.as_slice()) as f32 / 1e9
-        // );
-
-        // use voracious_radix_sort::RadixSort;
-        // stpd_samples.voracious_mt_sort(12);
-        // // FIXME: THIS IS TERRIBLY SLOW FOR 12 BYTE DATA.
-        // links.voracious_mt_sort(12);
-
-        // let stpd_samples
-        // stpd_samples.dedup();
-        // assert_eq!(stpd_samples.len(), 0);
-        // links.dedup();
-        // Free the excess capacity.
-        // links.shrink_to_fit();
-        // eprintln!(
-        //     "Links: {:.3} GB (deduped)",
-        //     std::mem::size_of_val(links.as_slice()) as f32 / 1e9
-        // );
 
         eprintln!(
             "Max LCP: {}",
@@ -523,7 +499,9 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
         }
 
         // Note: replace by the set of all jump targets if needed.
+        // Then, sort co-lex and dedup.
         let stpd_samples = vec![];
+
         let stpd_pi: Vec<u64> = stpd_samples.iter().map(|&x| pi[x] as u64).collect();
 
         JumpIndex {
@@ -668,13 +646,19 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
 
     /// Returns leftmost text position where the pattern matches.
     pub fn map_jump(&self, pattern: &[u8]) -> Option<usize> {
+        // eprintln!("searching for {pattern:?}");
         let mut pos = 0;
         for (i, &c) in pattern.iter().enumerate() {
             if self.t.as_ref()[pos] == c {
                 pos += 1;
                 continue;
             }
+            // eprintln!(
+            //     "{i}: mismatch at {pos}: got {} wanted {c}",
+            //     self.t.as_ref()[pos]
+            // );
 
+            // find the first link at (pos, c) with LCP >= i.
             let (_idx, link) = self
                 .ef_links
                 .succ(&link::Link::new(pos, c, i, 0).key())
@@ -682,12 +666,33 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
             let link = link::Link::from_key(link);
             // eprintln!("pos {pos} link {link:?}");
             if link.source() == pos && link.c() as u8 == c {
+                // eprintln!("link: {link:?}");
                 pos = link.target() + 1;
             } else {
+                // eprintln!("no link found; next is {link:?}");
                 return None;
             }
         }
-        Some(pos - pattern.len())
+        pos -= pattern.len();
+        // eprintln!("Pattern found at {pos}");
+        Some(pos)
+    }
+
+    /// Take a bunch of random substrings and map them against the text.
+    pub fn test_map(&self) {
+        let cnt = 1000000;
+        let len = 1..100;
+        for _ in 0..cnt {
+            let len = rand::random_range(len.clone());
+            let i = rand::random_range(0..=self.t.as_ref().len() - len);
+            let j = i + len;
+            let pattern = &self.t.as_ref()[i..j];
+            let p1 = self.map_jump(pattern);
+            assert!(p1.is_some(), "substring {i}..{j} not found");
+            let pos = p1.unwrap();
+            assert!(pos <= i, "substring {i}..{j} found at pos {pos}");
+            // eprintln!("substring {i}..{j} found at pos {pos}");
+        }
     }
 }
 

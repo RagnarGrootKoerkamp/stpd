@@ -463,7 +463,7 @@ pub fn stpd(t: &T, _sa: &SA, _lcp: &impl Lcp, perm: &Vec<usize>) -> usize {
     sampled.len()
 }
 
-pub fn jump_index(t: &T) -> usize {
+pub fn jump_index(t: &T) {
     let jump_index = jump_index::JumpIndex::new(t);
 
     let JumpIndexStats { num_sampled, num_sources, num_source_chars, num_links, cdawg_nodes, cdawg_edges } = jump_index.stats();
@@ -477,9 +477,10 @@ pub fn jump_index(t: &T) -> usize {
     eprint!(" {:>5.2}  | ", num_links as f32 / c);
     eprint!(" {:>5.2}  | ", cdawg_nodes as f32 / c);
     eprintln!(" {:>5.2}  | ", cdawg_edges as f32 / c);
-    // jump_index.space();
-    // jump_index.inspect_links();
-    num_sampled
+
+    eprintln!("\nTesting mapping");
+    jump_index.test_map();
+
 }
 
 
