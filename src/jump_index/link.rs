@@ -25,7 +25,7 @@ pub struct CompactLink {
 }
 
 pub const SOURCE_BITS: u32 = 32;
-pub const C_BITS: u32 = 8; // TODO: Reduce to 2
+pub const C_BITS: u32 = 2; // TODO: Variable-width.
 pub const LCP_BITS: u32 = 22; // enough for reference genome
 pub const TARGET_BITS: u32 = 32; // enough for reference genome
 pub const LINK_BITS: u32 = SOURCE_BITS + C_BITS + LCP_BITS + TARGET_BITS;

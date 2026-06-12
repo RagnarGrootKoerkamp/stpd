@@ -187,6 +187,12 @@ fn stpd_human() {
     // us:     330s for 100 copies of 10 Mbp =>  3.0 Mbp/s  1 thread
 }
 
+fn to_dna(t: &mut Vec<u8>) {
+    for x in t {
+        *x = (*x >> 1) & 3;
+    }
+}
+
 fn pizzachili(filter: Option<&str>) -> Vec<(String, T)> {
     let dir = "/home/philae/git/eth/data/pizzachili/repetitive";
     let mut entries: Vec<_> = std::fs::read_dir(dir)
@@ -208,7 +214,8 @@ fn pizzachili(filter: Option<&str>) -> Vec<(String, T)> {
         .into_iter()
         .map(|e| {
             let name = e.file_name().to_string_lossy().into_owned();
-            let data = std::fs::read(e.path()).expect("failed to read file");
+            let mut data = std::fs::read(e.path()).expect("failed to read file");
+            to_dna(&mut data);
             (name, data)
         })
         .collect()
