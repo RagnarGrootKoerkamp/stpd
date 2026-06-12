@@ -1,15 +1,21 @@
 use itertools::Itertools;
-use link::Link;
+use link::{BareEf, Link};
+use mem_dbg::MemSize;
 use std::{
     cmp::Ordering::{Greater, Less},
     marker::Sync,
     ops::Range,
 };
-use sux::{bits::BitVec, dict::EliasFano, rank_sel::SelectZeroAdaptConst, traits::Succ};
+use sux::{
+    bits::BitVec,
+    dict::{EliasFano, EliasFanoConcurrentBuilder},
+    rank_sel::SelectZeroAdaptConst,
+    traits::{IndexedDict, IndexedSeq, Succ},
+};
 use voracious_radix_sort::RadixSort;
 
 use crate::{
-    bwt,
+    bwt, gbs,
     lcp::Lcp,
     rmq::{self, Rmq},
     sa_and_lcp_cached,
@@ -366,12 +372,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
             let max = max.into_inner().unwrap();
             eprintln!(
                 "Total EF size after partitioning: {:.3} GB",
-                efs_per_pivot
-                    .iter()
-                    .flatten()
-                    .map(|ef| mem_dbg::MemSize::mem_size(ef, mem_dbg::SizeFlags::default()))
-                    .sum::<usize>() as f32
-                    / 1e9
+                efs_per_pivot.iter().flatten().map(crate::gbs).sum::<f32>()
             );
 
             eprintln!("Build an EF for each part");
@@ -384,10 +385,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                         "{i}: Merging {} EFs of total len {} total size {:.3}",
                         efs.len(),
                         efs.iter().map(|ef| ef.len()).sum::<usize>(),
-                        efs.iter()
-                            .map(|ef| mem_dbg::MemSize::mem_size(ef, mem_dbg::SizeFlags::default()))
-                            .sum::<usize>() as f32
-                            / 1e9,
+                        efs.iter().map(crate::gbs).sum::<f32>()
                     );
                     for ef in efs {
                         vals.extend(ef.iter());
@@ -425,7 +423,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                     / 1e9
             );
 
-            let n = part_efs.iter().map(|ef| ef.1.len()).sum();
+            let n = part_efs.iter().map(|ef| ef.1.len()).sum::<usize>();
             eprintln!("Merge part EFs. Dedupped to {n} links");
             let mut ef_builder = sux::dict::elias_fano::EliasFanoBuilder::<u128>::new(n, max);
             for (min, part_ef) in part_efs {
@@ -440,21 +438,14 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
             ef_builder.build_with_dict()
         };
 
-        eprintln!(
-            "final EF size: {:.3} GB",
-            mem_dbg::MemSize::mem_size(&ef_links, mem_dbg::SizeFlags::default()) as f32 / 1e9
-        );
-
-        eprintln!("splitting..");
+        eprintln!("---");
+        eprintln!("final EF size: {}", print_ef(&ef_links));
+        eprintln!("---");
+        eprintln!("splitting.. (drop 1 LCP per (source, c))");
         let (ef_compact, ef_lcp) = link::links_to_compact_ef(&ef_links);
-        eprintln!(
-            "compact EF size: {:.3} GB",
-            mem_dbg::MemSize::mem_size(&ef_compact, mem_dbg::SizeFlags::default()) as f32 / 1e9
-        );
-        eprintln!(
-            "LCP EF size:     {:.3} GB",
-            mem_dbg::MemSize::mem_size(&ef_lcp, mem_dbg::SizeFlags::default()) as f32 / 1e9
-        );
+        eprintln!("compact EF size: {}", print_ef(&ef_compact));
+        eprintln!("LCP EF size:     {}", print_ef(&ef_lcp));
+        eprintln!("---");
 
         // eprintln!(
         //     "Links: {:.3} GB",
@@ -751,4 +742,13 @@ mod test {
         eprintln!("STPD: {t1:?}");
         eprintln!("JI:   {t2:?}");
     }
+}
+
+fn print_ef<V, H, L>(ef: &EliasFano<V, H, L>) -> String
+where
+    EliasFano<V, H, L>: MemSize,
+{
+    let n = ef.len();
+    let l = ef.num_lower_bits();
+    format!("{:.3} GB : {n} * (2 + {l}) bits", gbs(ef))
 }

@@ -1748,8 +1748,6 @@ dependencies = [
 [[package]]
 name = "sux"
 version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9c7bb0732ef419ea39063a3f345cd5feea30765842354d52d709e28fb04cceec"
 dependencies = [
  "ambassador",
  "anyhow",

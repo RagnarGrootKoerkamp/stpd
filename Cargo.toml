@@ -22,7 +22,7 @@ rand = "0.9.1"
 rayon = "1.12.0"
 serde = { version = "1.0", features = ["derive"] }
 simd-minimizers = "1.1.0"
-sux = { version = "0.14.0", features = ["serde"] }
+sux = { version = "0.14.0", features = ["serde"], path = "../forks/sux-rs" }
 tiered-vector = "1.0.1"
 voracious_radix_sort = { version = "1.2.0", features = ["voracious_multithread"] }
 prefetch-index = "0.2.0"

@@ -577,3 +577,7 @@ pub fn longest_common_prefix(a: &[u8], b: &[u8]) -> usize {
     }
     l
 }
+
+pub fn gbs(ef: &impl mem_dbg::MemSize) -> f32 {
+    mem_dbg::MemSize::mem_size(ef, mem_dbg::SizeFlags::default()) as f32 / 1e9
+}
