@@ -191,28 +191,23 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                 let mut links = vec![];
                 let mut cdawg_nodes = 0;
                 let mut cdawg_edges = 0;
-                let a = dfs2(
-                    start..end,
-                    &mut links,
-                    &mut cdawg_nodes,
-                    &mut cdawg_edges,
-                );
+                let a = dfs2(start..end, &mut links, &mut cdawg_nodes, &mut cdawg_edges);
                 let links_ef = link::links_to_ef(links);
 
                 let done = done.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-                let total =
-                    total.fetch_add(links_ef.len(), std::sync::atomic::Ordering::SeqCst) + links_ef.len();
+                let total = total.fetch_add(links_ef.len(), std::sync::atomic::Ordering::SeqCst)
+                    + links_ef.len();
                 let ef_size = mem_dbg::MemSize::mem_size(&links_ef, mem_dbg::SizeFlags::default());
                 let ef_total =
                     ef_total.fetch_add(ef_size, std::sync::atomic::Ordering::SeqCst) + ef_size;
 
-                eprintln!(
-                    "{done:>2}: Collected {} links, {total} total, EF {:.3} GB (total EF {:.3} GB; total flat {:.3})",
-                    links_ef.len(),
-                    ef_size as f32 / 1e9,
-                    ef_total as f32 / 1e9,
-                    (total * std::mem::size_of::<Link>()) as f32 / 1e9,
-                );
+                // eprintln!(
+                //     "{done:>2}: Collected {} links, {total} total, EF {:.3} GB (total EF {:.3} GB; total flat {:.3})",
+                //     links_ef.len(),
+                //     ef_size as f32 / 1e9,
+                //     ef_total as f32 / 1e9,
+                //     (total * std::mem::size_of::<Link>()) as f32 / 1e9,
+                // );
 
                 (a, links_ef, cdawg_nodes, cdawg_edges)
             })
@@ -377,36 +372,36 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                 .enumerate()
                 .map(|(i, efs)| {
                     let mut vals = vec![];
-                    eprintln!(
-                        "{i}: Merging {} EFs of total len {} total size {:.3}",
-                        efs.len(),
-                        efs.iter().map(|ef| ef.len()).sum::<usize>(),
-                        efs.iter().map(crate::gbs).sum::<f32>()
-                    );
+                    // eprintln!(
+                    //     "{i}: Merging {} EFs of total len {} total size {:.3}",
+                    //     efs.len(),
+                    //     efs.iter().map(|ef| ef.len()).sum::<usize>(),
+                    //     efs.iter().map(crate::gbs).sum::<f32>()
+                    // );
                     for ef in efs {
                         vals.extend(ef.iter());
                     }
-                    eprintln!(
-                        "{i}: vals size: {:.3} GB",
-                        std::mem::size_of_val(vals.as_slice()) as f32 / 1e9
-                    );
+                    // eprintln!(
+                    //     "{i}: vals size: {:.3} GB",
+                    //     std::mem::size_of_val(vals.as_slice()) as f32 / 1e9
+                    // );
                     vals.voracious_sort();
                     // vals.sort_unstable();
                     vals.dedup();
-                    eprintln!(
-                        "{i}: vals size after dedup: {:.3} GB",
-                        std::mem::size_of_val(vals.as_slice()) as f32 / 1e9
-                    );
+                    // eprintln!(
+                    //     "{i}: vals size after dedup: {:.3} GB",
+                    //     std::mem::size_of_val(vals.as_slice()) as f32 / 1e9
+                    // );
                     let min = *vals.first().unwrap_or(&0);
                     for x in &mut *vals {
                         *x -= min;
                     }
                     let out = link::BareEf::from(vals);
-                    eprintln!(
-                        "{i}: output EF size: {:.3} GB",
-                        mem_dbg::MemSize::mem_size(&out, mem_dbg::SizeFlags::default()) as f32
-                            / 1e9
-                    );
+                    // eprintln!(
+                    //     "{i}: output EF size: {:.3} GB",
+                    //     mem_dbg::MemSize::mem_size(&out, mem_dbg::SizeFlags::default()) as f32
+                    //         / 1e9
+                    // );
                     (min, out)
                 })
                 .collect();
@@ -420,15 +415,15 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
             );
 
             let n = part_efs.iter().map(|ef| ef.1.len()).sum::<usize>();
-            eprintln!("Merge part EFs. Dedupped to {n} links");
+            // eprintln!("Merge part EFs. Dedupped to {n} links");
             let mut ef_builder = sux::dict::elias_fano::EliasFanoBuilder::<u128>::new(n, max);
             for (min, part_ef) in part_efs {
-                eprintln!(
-                    "Extending by {} elems size {}",
-                    part_ef.len(),
-                    mem_dbg::MemSize::mem_size(&part_ef, mem_dbg::SizeFlags::default()) as f32
-                        / 1e9
-                );
+                // eprintln!(
+                //     "Extending by {} elems size {}",
+                //     part_ef.len(),
+                //     mem_dbg::MemSize::mem_size(&part_ef, mem_dbg::SizeFlags::default()) as f32
+                //         / 1e9
+                // );
                 ef_builder.extend(part_ef.iter().map(|x| x + min));
             }
             ef_builder.build_with_dict()
