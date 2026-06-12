@@ -639,8 +639,8 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
         Some(pos - pattern.len())
     }
 
-    /// Returns leftmost text position where the pattern matches.
-    pub fn map_jump(&self, pattern: &[u8]) -> Option<usize> {
+    /// Returns the position in the text of the longest prefix of the pattern that matches.
+    pub fn map_jump(&self, pattern: &[u8]) -> Range<usize> {
         // eprintln!("searching for {pattern:?}");
         let mut pos = 0;
         for (i, &c) in pattern.iter().enumerate() {
@@ -665,26 +665,25 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                 pos = link.target() + 1;
             } else {
                 // eprintln!("no link found; next is {link:?}");
-                return None;
+                return pos - i..pos;
             }
         }
-        pos -= pattern.len();
-        // eprintln!("Pattern found at {pos}");
-        Some(pos)
+        // eprintln!("Pattern found at {}", pos-pattern.len());
+        pos - pattern.len()..pos
     }
 
     /// Take a bunch of random substrings and map them against the text.
     pub fn test_map(&self) {
         let cnt = 1000000;
-        let len = 1..100;
+        let len = 1..1000;
         for _ in 0..cnt {
             let len = rand::random_range(len.clone());
             let i = rand::random_range(0..=self.t.as_ref().len() - len);
             let j = i + len;
             let pattern = &self.t.as_ref()[i..j];
             let p1 = self.map_jump(pattern);
-            assert!(p1.is_some(), "substring {i}..{j} not found");
-            let pos = p1.unwrap();
+            assert!(p1.len() == pattern.len(), "substring {i}..{j} not found");
+            let pos = p1.start;
             assert!(pos <= i, "substring {i}..{j} found at pos {pos}");
             // eprintln!("substring {i}..{j} found at pos {pos}");
         }
@@ -747,7 +746,7 @@ mod test {
                 eprintln!("p1: {p1:?}");
                 eprintln!("p2: {p2:?}");
                 let p1 = p1.unwrap();
-                let p2 = p2.unwrap();
+                let p2 = p2.start;
 
                 assert_eq!(&t[p1..p1 + len], pattern);
                 assert_eq!(&t[p2..p2 + len], pattern);
