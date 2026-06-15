@@ -65,7 +65,7 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
     /// they are not needed anymore.
     pub fn new2<L: Lcp + Sync>(
         t: &'t T,
-        sa: impl AsRef<SA> + Sync,
+        sa: impl AsRef<SA> + Sync + std::fmt::Debug,
         bwt: impl AsRef<T> + Sync,
         lcp: impl AsRef<L> + Sync,
         pi: &SA,
@@ -97,6 +97,7 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
                 Pi::LeftMost => *anchors.iter().min_by_key(|a| permuted_pi[**a]).unwrap(),
                 Pi::RightMost => *anchors.iter().max_by_key(|a| permuted_pi[**a]).unwrap(),
             };
+            // eprintln!("single run: {single_run:?}");
             if single_run || anchors.len() == 1 {
                 return best;
             }
@@ -121,8 +122,8 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
                             + lcs(&t[..source - lcp as usize], &t[..target - lcp as usize]),
                         target,
                     ));
+                    // eprintln!("Link: {:?}", links.last().unwrap());
                 }
-                // eprintln!("Link: {:?}", links.last().unwrap());
             }
             best
         };
@@ -184,7 +185,11 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
         };
 
         const PREFIX_LCP: u32 = 3;
-        eprintln!("Collecting intervals with LCP > {PREFIX_LCP}");
+        // eprintln!("Collecting intervals with LCP > {PREFIX_LCP}");
+        // eprintln!("SA:  {sa:?}");
+        // for (i, x) in sa.as_ref().iter().enumerate() {
+        // eprintln!("{i:>3} {x:>3}: {}", crate::print(&t[*x as usize..]));
+        // }
         let intervals: Vec<usize> = (0..=n)
             .into_par_iter()
             .filter(|&i| i == 0 || lcp.as_ref().get(sa.as_ref(), i - 1) <= PREFIX_LCP)
@@ -206,11 +211,11 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
                 let a = dfs2(start..end, &mut links, &mut cdawg_nodes, &mut cdawg_edges);
                 let links_ef = link::links_to_ef(links);
 
-                let done = done.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-                let total = total.fetch_add(links_ef.len(), std::sync::atomic::Ordering::SeqCst)
+                let _done = done.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                let _total = total.fetch_add(links_ef.len(), std::sync::atomic::Ordering::SeqCst)
                     + links_ef.len();
                 let ef_size = mem_dbg::MemSize::mem_size(&links_ef, mem_dbg::SizeFlags::default());
-                let ef_total =
+                let _ef_total =
                     ef_total.fetch_add(ef_size, std::sync::atomic::Ordering::SeqCst) + ef_size;
 
                 // eprintln!(
@@ -235,15 +240,20 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
             let mut anchors: Vec<_> = dfs_results.iter().map(|x| x.0).collect();
             // eprintln!("Intervals: {intervals:?}");
             // eprintln!("Anchors:   {anchors:?}");
-            for cur_lcp in (1..=PREFIX_LCP).rev() {
+            for cur_lcp in (1..=PREFIX_LCP + 0).rev() {
+                // eprintln!("cur lcp: {cur_lcp}");
                 let mut new_intervals = vec![0];
                 let mut new_anchors = vec![];
 
                 let mut start_idx = 0;
+                // for start_idx in 0..intervals.len() - 1 {
                 for end_idx in 1..intervals.len() {
+                    // let end_idx = start_idx + 1;
                     let start = intervals[start_idx];
                     let end = intervals[end_idx];
                     if lcp.as_ref().get(sa.as_ref(), end - 1) < cur_lcp {
+                        // eprintln!("intervals[{start_idx}..{end_idx}]");
+                        // eprintln!("sa[{start}..{end}]");
                         new_intervals.push(end);
                         new_anchors.push(link(
                             &anchors[start_idx..end_idx],
@@ -393,7 +403,7 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
             let part_efs: Vec<(u128, link::BareEf)> = efs_per_pivot
                 .into_par_iter()
                 .enumerate()
-                .map(|(i, efs)| {
+                .map(|(_i, efs)| {
                     let mut vals = vec![];
                     // eprintln!(
                     //     "{i}: Merging {} EFs of total len {} total size {:.3}",
@@ -757,7 +767,7 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
 
         for rate in [0.01, 0.001] {
             let mut patterns = vec![];
-            for it in 0..cnt {
+            for _it in 0..cnt {
                 let len = rand::random_range(len.clone());
                 let i = rand::random_range(0..=self.t.len() - len);
                 let j = i + len;
@@ -772,7 +782,7 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
             let start = std::time::Instant::now();
             let mut parts = 0;
             let mut jumps = 0;
-            for (it, pattern) in patterns.iter().enumerate() {
+            for (_it, pattern) in patterns.iter().enumerate() {
                 let (ps, js) = self.map_rlz(&pattern);
                 parts += ps;
                 jumps += js;
@@ -817,7 +827,7 @@ mod test {
     }
     fn test_direction<const PI: Pi>() {
         eprintln!("--- TESTING {PI:?} ---");
-        let mut t1 = std::time::Duration::default();
+        // let mut t1 = std::time::Duration::default();
         let mut t2 = std::time::Duration::default();
         for (len, repeats, r) in [
             (10, 1, 0.1),
@@ -889,7 +899,7 @@ mod test {
                 // assert_eq!(p1, p2);
             }
         }
-        eprintln!("STPD: {t1:?}");
+        // eprintln!("STPD: {t1:?}");
         eprintln!("JI:   {t2:?}");
     }
 
