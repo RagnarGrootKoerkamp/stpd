@@ -1,10 +1,12 @@
 use itertools::Itertools;
 use link::Link;
-use mem_dbg::MemSize;
+use mem_dbg::{MemSize, SizeFlags};
+use rayon::prelude::*;
 use std::{
     cmp::Ordering::{Greater, Less},
     marker::ConstParamTy,
     ops::Range,
+    sync::atomic::{AtomicUsize, Ordering},
 };
 #[allow(unused)]
 use sux::{
@@ -25,6 +27,7 @@ use crate::{
 mod link;
 pub mod storage;
 
+/// TODO: LexMin, LexMax, CoLexMin, CoLexMax.
 #[derive(PartialEq, Eq, ConstParamTy, Debug)]
 pub enum Pi {
     LeftMost,
@@ -58,400 +61,7 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
     /// These are AsRef so we can give owned objects and drop them as soon as
     /// they are not needed anymore.
     pub fn new(t: &'t T) -> Self {
-        let n = t.len();
-
-        let (sa, lcp) = sa_and_lcp_cached(t);
-        let bwt = bwt(t, &sa);
-
-        // eprintln!("SA: {:?}", sa);
-        // eprintln!(
-        // "LCP: {:?}",
-        // (0..n).map(|i| lcp.get(sa, i)).collect_vec()
-        // );
-
-        // Find the best anchor of the set, add links to the others, and return the best.
-        let link = |anchors: &[usize],
-                    lcp: u32,
-                    single_run: bool,
-                    links: &mut Vec<link::Link>,
-                    cdawg_nodes: &mut usize,
-                    cdawg_edges: &mut usize|
-         -> usize {
-            let best = match PI {
-                Pi::LeftMost => *anchors.iter().min_by_key(|a| sa[**a]).unwrap(),
-                Pi::RightMost => *anchors.iter().max_by_key(|a| sa[**a]).unwrap(),
-            };
-            // eprintln!("single run: {single_run:?}");
-            if single_run || anchors.len() == 1 {
-                return best;
-            }
-            *cdawg_nodes += 1;
-            *cdawg_edges += anchors.len();
-            for &a in anchors {
-                if a == best {
-                    continue;
-                }
-                let text_idx = sa[a] as usize;
-                let target = text_idx + lcp as usize;
-                // TODO: Why do we need this if statement?
-                if target < t.len() {
-                    // sa[best] is HOT.
-                    let source = sa[best] as usize + lcp as usize;
-                    let c = t[target];
-                    links.push(link::Link::new(
-                        source,
-                        c,
-                        // co_lcp is HOT.
-                        lcp as usize
-                            + lcs(&t[..source - lcp as usize], &t[..target - lcp as usize]),
-                        target,
-                    ));
-                    // eprintln!("Link: {:?}", links.last().unwrap());
-                }
-            }
-            best
-        };
-
-        // Returns the anchor for the input interval.
-        // Does a DFS over suffix tree nodes via state (suffix array interval, LCP).
-        // Discovers child intervals and endpoints on-the-fly during linear scan.
-        //
-        let dfs2 = |interval: Range<usize>,
-                    links: &mut Vec<link::Link>,
-                    cdawg_nodes: &mut usize,
-                    cdawg_edges: &mut usize|
-         -> usize {
-            // eprintln!("DFS2 {interval:?}");
-            let mut stack: Vec<(usize, u32, Vec<usize>)> = vec![];
-
-            let mut run_start = interval.start;
-            for i in interval.clone() {
-                // New run?
-                if i > 0 && bwt[i] != bwt[i - 1] {
-                    run_start = i;
-                }
-                // Same run, but one wraps around the text?
-                if sa[i] == 0 || (i > 0 && sa[i - 1] == 0) {
-                    run_start = i;
-                }
-
-                let l = lcp.get(&sa, i);
-                // eprintln!("{i} => {l}");
-
-                let mut last_start = i;
-                let mut a = i;
-                while !stack.is_empty() && (l < stack.last().unwrap().1 || i == interval.end - 1) {
-                    let (start, lcp, mut anchors) = stack.pop().unwrap();
-                    anchors.push(a);
-                    let single_run = run_start <= start;
-                    a = link(&anchors, lcp, single_run, links, cdawg_nodes, cdawg_edges);
-                    last_start = start;
-                    // eprintln!(
-                    //     "{start}..={i}: {lcp}  min@{a} {}",
-                    //     if single_run { "single run!" } else { "" }
-                    // );
-                }
-                if i == interval.end - 1 {
-                    assert!(stack.is_empty());
-                    // eprintln!("DFS RETURNS {a}");
-                    return a;
-                }
-                if !stack.is_empty() && l == stack.last().unwrap().1 {
-                    stack.last_mut().unwrap().2.push(a);
-                } else {
-                    // eprintln!("new {last_start}..: {l} first anchor {a}");
-                    stack.push((last_start, l, vec![a]));
-                }
-            }
-            unreachable!();
-
-            // assert!(stack.is_empty());
-            // links.sort_by_key(Link::key);
-            // eprintln!("LINKS");
-            // for link in links {
-            //     eprintln!("{link:?}");
-            // }
-        };
-
-        const PREFIX_LCP: u32 = 3;
-        // eprintln!("Collecting intervals with LCP > {PREFIX_LCP}");
-        // eprintln!("SA:  {sa:?}");
-        // for (i, x) in sa.iter().enumerate() {
-        // eprintln!("{i:>3} {x:>3}: {}", crate::print(&t[*x as usize..]));
-        // }
-        let intervals: Vec<usize> = (0..=n)
-            .into_par_iter()
-            .filter(|&i| i == 0 || lcp.get(&sa, i - 1) <= PREFIX_LCP)
-            .collect();
-        // eprintln!("intervals: {intervals:?}");
-
-        eprintln!("Run on {} intervals!", intervals.len());
-        let done = std::sync::atomic::AtomicUsize::new(0);
-        let total = std::sync::atomic::AtomicUsize::new(0);
-        let ef_total = std::sync::atomic::AtomicUsize::new(0);
-        use rayon::prelude::*;
-        let mut dfs_results: Vec<(usize, link::BareEf, usize, usize)> = intervals
-            .par_array_windows()
-            // .array_windows()
-            .map(|&[start, end]| {
-                // eprintln!("sa[{start}..{end}]");
-                let mut links = vec![];
-                let mut cdawg_nodes = 0;
-                let mut cdawg_edges = 0;
-                let a = dfs2(start..end, &mut links, &mut cdawg_nodes, &mut cdawg_edges);
-                let links_ef = link::links_to_ef(links);
-
-                let _done = done.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-                let _total = total.fetch_add(links_ef.len(), std::sync::atomic::Ordering::SeqCst)
-                    + links_ef.len();
-                let ef_size = mem_dbg::MemSize::mem_size(&links_ef, mem_dbg::SizeFlags::default());
-                let _ef_total =
-                    ef_total.fetch_add(ef_size, std::sync::atomic::Ordering::SeqCst) + ef_size;
-
-                // eprintln!(
-                //     "{done:>2}: Collected {} links, {total} total, EF {:.3} GB (total EF {:.3} GB; total flat {:.3})",
-                //     links_ef.len(),
-                //     ef_size as f32 / 1e9,
-                //     ef_total as f32 / 1e9,
-                //     (total * std::mem::size_of::<Link>()) as f32 / 1e9,
-                // );
-
-                (a, links_ef, cdawg_nodes, cdawg_edges)
-            })
-            .collect();
-
-        let mut links: Vec<link::Link> = vec![];
-        let mut cdawg_nodes = 1; // the final node
-        let mut cdawg_edges = 0;
-        // Process the top few layers.
-        let root_anchor;
-        {
-            let mut intervals = intervals;
-            let mut anchors: Vec<_> = dfs_results.iter().map(|x| x.0).collect();
-            // eprintln!("Intervals: {intervals:?}");
-            // eprintln!("Anchors:   {anchors:?}");
-            for cur_lcp in (1..=PREFIX_LCP + 0).rev() {
-                // eprintln!("cur lcp: {cur_lcp}");
-                let mut new_intervals = vec![0];
-                let mut new_anchors = vec![];
-
-                let mut start_idx = 0;
-                // for start_idx in 0..intervals.len() - 1 {
-                for end_idx in 1..intervals.len() {
-                    // let end_idx = start_idx + 1;
-                    let start = intervals[start_idx];
-                    let end = intervals[end_idx];
-                    if lcp.get(&sa, end - 1) < cur_lcp {
-                        // eprintln!("intervals[{start_idx}..{end_idx}]");
-                        // eprintln!("sa[{start}..{end}]");
-                        new_intervals.push(end);
-                        new_anchors.push(link(
-                            &anchors[start_idx..end_idx],
-                            cur_lcp,
-                            bwt[start..end].iter().all_equal()
-                                && sa[start..end].iter().all(|&x| x != 0),
-                            &mut links,
-                            &mut cdawg_nodes,
-                            &mut cdawg_edges,
-                        ));
-                        start_idx = end_idx;
-                    }
-                }
-                anchors = new_anchors;
-                intervals = new_intervals;
-                // eprintln!("Intervals: {intervals:?}");
-                // eprintln!("Anchors:   {anchors:?}");
-            }
-            let idx_of_min = link(
-                &anchors,
-                0,
-                bwt.iter().all_equal(),
-                &mut links,
-                &mut cdawg_nodes,
-                &mut cdawg_edges,
-            );
-            eprintln!("Idx of min: {idx_of_min}");
-            root_anchor = sa[idx_of_min] as usize;
-            eprintln!("Root anchor: {root_anchor}");
-            match PI {
-                Pi::LeftMost => {
-                    assert_eq!(root_anchor, 0);
-                }
-                Pi::RightMost => {
-                    assert_eq!(root_anchor, sa.len() - 1);
-                }
-            }
-        }
-        {
-            // Collect links from top layers.
-            let mut links = links.into_iter().map(|l| l.key()).collect_vec();
-            links.sort();
-            links.dedup();
-            dfs_results.push((0, link::BareEf::from(links), 0, 0));
-        }
-
-        // Drop all support structures.
-        drop(bwt);
-        drop(lcp);
-        drop(sa);
-
-        // Collect all links
-
-        let mut num_vals = 0;
-        for (_a, ef, cn, ce) in &dfs_results {
-            num_vals += ef.len();
-            cdawg_nodes += cn;
-            cdawg_edges += ce;
-        }
-
-        let ef_links = {
-            eprintln!(
-                "Total EF size before merging: {:.3} GB",
-                dfs_results
-                    .iter()
-                    .map(|(_a, ef, _cn, _ce)| mem_dbg::MemSize::mem_size(
-                        ef,
-                        mem_dbg::SizeFlags::default()
-                    ))
-                    .sum::<usize>() as f32
-                    / 1e9
-            );
-
-            eprintln!("Select pivots");
-            const NUM_PIVOTS: usize = 80;
-            const OVERSAMPLING: usize = 100;
-            // Oversample 100x to smoothen the distribution.
-            let mut pivot_idxs = (0..NUM_PIVOTS * OVERSAMPLING)
-                .map(|_| rand::random_range(0..num_vals))
-                .collect_vec();
-            pivot_idxs.sort_unstable();
-            pivot_idxs.dedup();
-
-            let mut pivots = vec![];
-            {
-                let mut i = 0;
-                let mut pivot_idx_iter = pivot_idxs.iter();
-                let mut next_pivot = *pivot_idx_iter.next().unwrap();
-                'outer: for (_a, ef, _cn, _ce) in &dfs_results {
-                    for x in ef.iter() {
-                        if i == next_pivot {
-                            pivots.push(x);
-                            next_pivot = match pivot_idx_iter.next() {
-                                Some(&idx) => idx,
-                                None => break 'outer,
-                            };
-                        }
-                        i += 1;
-                    }
-                }
-                pivots.sort_unstable();
-                // Keep only every 100'th pivot
-                pivots = pivots
-                    .into_iter()
-                    .enumerate()
-                    .filter(|(i, _)| i % OVERSAMPLING == 0)
-                    .map(|(_, x)| x)
-                    .collect_vec();
-                pivots.insert(0, 0);
-                pivots.push(u128::MAX);
-                pivots.dedup();
-            }
-
-            let efs_per_pivot: Vec<std::sync::Mutex<Vec<link::BareEf>>> = (0..pivots.len())
-                .map(|_| std::sync::Mutex::new(vec![]))
-                .collect();
-            let max = std::sync::Mutex::new(0u128);
-            eprintln!("Partitioning EFs");
-            dfs_results.into_par_iter().for_each(|(_a, ef, _cn, _ce)| {
-                if ef.len() == 0 {
-                    return;
-                }
-                let vals = ef.iter().collect_vec();
-                {
-                    let mut max = max.lock().unwrap();
-                    *max = (*max).max(*vals.last().unwrap());
-                }
-                let splits = pivots
-                    .iter()
-                    .map(|&p| vals.partition_point(|&x| x < p))
-                    .collect_vec();
-                for i in 0..pivots.len() - 1 {
-                    let bare_ef = link::BareEf::from(&vals[splits[i]..splits[i + 1]]);
-                    efs_per_pivot[i].lock().unwrap().push(bare_ef);
-                }
-            });
-            let efs_per_pivot = efs_per_pivot
-                .into_iter()
-                .map(|m| m.into_inner().unwrap())
-                .collect_vec();
-            let max = max.into_inner().unwrap();
-            eprintln!(
-                "Total EF size after partitioning: {:.3} GB",
-                efs_per_pivot.iter().flatten().map(crate::gbs).sum::<f32>()
-            );
-
-            eprintln!("Build an EF for each part");
-            let part_efs: Vec<(u128, link::BareEf)> = efs_per_pivot
-                .into_par_iter()
-                .enumerate()
-                .map(|(_i, efs)| {
-                    let mut vals = vec![];
-                    // eprintln!(
-                    //     "{i}: Merging {} EFs of total len {} total size {:.3}",
-                    //     efs.len(),
-                    //     efs.iter().map(|ef| ef.len()).sum::<usize>(),
-                    //     efs.iter().map(crate::gbs).sum::<f32>()
-                    // );
-                    for ef in efs {
-                        vals.extend(ef.iter());
-                    }
-                    // eprintln!(
-                    //     "{i}: vals size: {:.3} GB",
-                    //     std::mem::size_of_val(vals.as_slice()) as f32 / 1e9
-                    // );
-                    vals.voracious_sort();
-                    // vals.sort_unstable();
-                    vals.dedup();
-                    // eprintln!(
-                    //     "{i}: vals size after dedup: {:.3} GB",
-                    //     std::mem::size_of_val(vals.as_slice()) as f32 / 1e9
-                    // );
-                    let min = *vals.first().unwrap_or(&0);
-                    for x in &mut *vals {
-                        *x -= min;
-                    }
-                    let out = link::BareEf::from(vals);
-                    // eprintln!(
-                    //     "{i}: output EF size: {:.3} GB",
-                    //     mem_dbg::MemSize::mem_size(&out, mem_dbg::SizeFlags::default()) as f32
-                    //         / 1e9
-                    // );
-                    (min, out)
-                })
-                .collect();
-            eprintln!(
-                "Total EF size after building parts: {:.3} GB",
-                part_efs
-                    .iter()
-                    .map(|(_min, ef)| mem_dbg::MemSize::mem_size(ef, mem_dbg::SizeFlags::default()))
-                    .sum::<usize>() as f32
-                    / 1e9
-            );
-
-            let n = part_efs.iter().map(|ef| ef.1.len()).sum::<usize>();
-            // eprintln!("Merge part EFs. Dedupped to {n} links");
-            let mut ef_builder = sux::dict::elias_fano::EliasFanoBuilder::<u128>::new(n, max);
-            for (min, part_ef) in part_efs {
-                // eprintln!(
-                //     "Extending by {} elems size {}",
-                //     part_ef.len(),
-                //     mem_dbg::MemSize::mem_size(&part_ef, mem_dbg::SizeFlags::default()) as f32
-                //         / 1e9
-                // );
-                ef_builder.extend(part_ef.iter().map(|x| x + min));
-            }
-            ef_builder.build_with_dict()
-        };
+        let (cdawg_nodes, cdawg_edges, root_anchor, ef_links) = Self::compute_links(t);
 
         if ef_links.len() < 100 {
             for l in ef_links.iter() {
@@ -539,6 +149,392 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
             cdawg_nodes,
             cdawg_edges,
         }
+    }
+
+    /// Returns:
+    /// - #cdawg nodes
+    /// - #cdawg edges
+    /// - root anchor
+    /// - EF-encoded links
+    fn compute_links(
+        t: &'t Vec<u8>,
+    ) -> (
+        usize,
+        usize,
+        usize,
+        EliasFano<
+            u128,
+            sux::prelude::SelectZeroAdaptConst<
+                sux::prelude::BitVec<Box<[usize]>>,
+                Box<[usize]>,
+                12,
+                3,
+            >,
+        >,
+    ) {
+        let n = t.len();
+        let (sa, lcp) = sa_and_lcp_cached(t);
+        let bwt = bwt(t, &sa);
+        let link = |anchors: &[usize],
+                    lcp: u32,
+                    single_run: bool,
+                    links: &mut Vec<link::Link>,
+                    cdawg_nodes: &mut usize,
+                    cdawg_edges: &mut usize|
+         -> usize {
+            let best = match PI {
+                Pi::LeftMost => *anchors.iter().min_by_key(|a| sa[**a]).unwrap(),
+                Pi::RightMost => *anchors.iter().max_by_key(|a| sa[**a]).unwrap(),
+            };
+            // eprintln!("single run: {single_run:?}");
+            if single_run || anchors.len() == 1 {
+                return best;
+            }
+            *cdawg_nodes += 1;
+            *cdawg_edges += anchors.len();
+            for &a in anchors {
+                if a == best {
+                    continue;
+                }
+                let text_idx = sa[a] as usize;
+                let target = text_idx + lcp as usize;
+                // TODO: Why do we need this if statement?
+                if target < t.len() {
+                    // sa[best] is HOT.
+                    let source = sa[best] as usize + lcp as usize;
+                    let c = t[target];
+                    links.push(link::Link::new(
+                        source,
+                        c,
+                        // co_lcp is HOT.
+                        lcp as usize
+                            + lcs(&t[..source - lcp as usize], &t[..target - lcp as usize]),
+                        target,
+                    ));
+                    // eprintln!("Link: {:?}", links.last().unwrap());
+                }
+            }
+            best
+        };
+        let dfs2 = |interval: Range<usize>,
+                    links: &mut Vec<link::Link>,
+                    cdawg_nodes: &mut usize,
+                    cdawg_edges: &mut usize|
+         -> usize {
+            // eprintln!("DFS2 {interval:?}");
+            let mut stack: Vec<(usize, u32, Vec<usize>)> = vec![];
+
+            let mut run_start = interval.start;
+            for i in interval.clone() {
+                // New run?
+                if i > 0 && bwt[i] != bwt[i - 1] {
+                    run_start = i;
+                }
+                // Same run, but one wraps around the text?
+                if sa[i] == 0 || (i > 0 && sa[i - 1] == 0) {
+                    run_start = i;
+                }
+
+                let l = lcp.get(&sa, i);
+                // eprintln!("{i} => {l}");
+
+                let mut last_start = i;
+                let mut a = i;
+                while !stack.is_empty() && (l < stack.last().unwrap().1 || i == interval.end - 1) {
+                    let (start, lcp, mut anchors) = stack.pop().unwrap();
+                    anchors.push(a);
+                    let single_run = run_start <= start;
+                    a = link(&anchors, lcp, single_run, links, cdawg_nodes, cdawg_edges);
+                    last_start = start;
+                    // eprintln!(
+                    //     "{start}..={i}: {lcp}  min@{a} {}",
+                    //     if single_run { "single run!" } else { "" }
+                    // );
+                }
+                if i == interval.end - 1 {
+                    assert!(stack.is_empty());
+                    // eprintln!("DFS RETURNS {a}");
+                    return a;
+                }
+                if !stack.is_empty() && l == stack.last().unwrap().1 {
+                    stack.last_mut().unwrap().2.push(a);
+                } else {
+                    // eprintln!("new {last_start}..: {l} first anchor {a}");
+                    stack.push((last_start, l, vec![a]));
+                }
+            }
+            unreachable!();
+
+            // assert!(stack.is_empty());
+            // links.sort_by_key(Link::key);
+            // eprintln!("LINKS");
+            // for link in links {
+            //     eprintln!("{link:?}");
+            // }
+        };
+        const PREFIX_LCP: u32 = 3;
+        let intervals: Vec<usize> = (0..=n)
+            .into_par_iter()
+            .filter(|&i| i == 0 || lcp.get(&sa, i - 1) <= PREFIX_LCP)
+            .collect();
+        eprintln!("Run on {} intervals!", intervals.len());
+        let done = std::sync::atomic::AtomicUsize::new(0);
+        let total = std::sync::atomic::AtomicUsize::new(0);
+        let ef_total = std::sync::atomic::AtomicUsize::new(0);
+        let cdawg_nodes = AtomicUsize::new(0);
+        let cdawg_edges = AtomicUsize::new(0);
+        let (anchors, mut dfs_results): (Vec<usize>, Vec<link::BareEf>) = intervals
+            .par_array_windows()
+            // .array_windows()
+            .map(|&[start, end]| {
+                // eprintln!("sa[{start}..{end}]");
+                let mut links = vec![];
+                let mut cn = 0;
+                let mut ce = 0;
+                let a = dfs2(start..end, &mut links, &mut cn, &mut ce);
+                let links_ef = link::links_to_ef(links);
+
+                let _done = done.fetch_add(1, Ordering::Relaxed) + 1;
+                let _total = total.fetch_add(links_ef.len(), Ordering::Relaxed) + links_ef.len();
+                let ef_size = MemSize::mem_size(&links_ef, SizeFlags::default());
+                let _ef_total = ef_total.fetch_add(ef_size, Ordering::Relaxed) + ef_size;
+                cdawg_nodes.fetch_add(cn, Ordering::Relaxed);
+                cdawg_edges.fetch_add(ce, Ordering::Relaxed);
+
+                // eprintln!(
+                //     "{done:>2}: Collected {} links, {total} total, EF {:.3} GB (total EF {:.3} GB; total flat {:.3})",
+                //     links_ef.len(),
+                //     ef_size as f32 / 1e9,
+                //     ef_total as f32 / 1e9,
+                //     (total * std::mem::size_of::<Link>()) as f32 / 1e9,
+                // );
+
+                (a, links_ef)
+            })
+            .unzip();
+
+        let mut cdawg_nodes = cdawg_nodes.into_inner();
+        let mut cdawg_edges = cdawg_edges.into_inner();
+
+        let mut links: Vec<link::Link> = vec![];
+        let root_anchor;
+        {
+            let mut intervals = intervals;
+            let mut anchors = anchors;
+            // eprintln!("Intervals: {intervals:?}");
+            // eprintln!("Anchors:   {anchors:?}");
+            for cur_lcp in (1..=PREFIX_LCP + 0).rev() {
+                // eprintln!("cur lcp: {cur_lcp}");
+                let mut new_intervals = vec![0];
+                let mut new_anchors = vec![];
+
+                let mut start_idx = 0;
+                // for start_idx in 0..intervals.len() - 1 {
+                for end_idx in 1..intervals.len() {
+                    // let end_idx = start_idx + 1;
+                    let start = intervals[start_idx];
+                    let end = intervals[end_idx];
+                    if lcp.get(&sa, end - 1) < cur_lcp {
+                        // eprintln!("intervals[{start_idx}..{end_idx}]");
+                        // eprintln!("sa[{start}..{end}]");
+                        new_intervals.push(end);
+                        new_anchors.push(link(
+                            &anchors[start_idx..end_idx],
+                            cur_lcp,
+                            bwt[start..end].iter().all_equal()
+                                && sa[start..end].iter().all(|&x| x != 0),
+                            &mut links,
+                            &mut cdawg_nodes,
+                            &mut cdawg_edges,
+                        ));
+                        start_idx = end_idx;
+                    }
+                }
+                anchors = new_anchors;
+                intervals = new_intervals;
+                // eprintln!("Intervals: {intervals:?}");
+                // eprintln!("Anchors:   {anchors:?}");
+            }
+            let idx_of_min = link(
+                &anchors,
+                0,
+                bwt.iter().all_equal(),
+                &mut links,
+                &mut cdawg_nodes,
+                &mut cdawg_edges,
+            );
+            eprintln!("Idx of min: {idx_of_min}");
+            root_anchor = sa[idx_of_min] as usize;
+            eprintln!("Root anchor: {root_anchor}");
+            match PI {
+                Pi::LeftMost => {
+                    assert_eq!(root_anchor, 0);
+                }
+                Pi::RightMost => {
+                    assert_eq!(root_anchor, sa.len() - 1);
+                }
+            }
+        }
+        {
+            // Collect links from top layers.
+            let mut links = links.into_iter().map(|l| l.key()).collect_vec();
+            links.sort();
+            links.dedup();
+            dfs_results.push(link::BareEf::from(links));
+        }
+        drop(bwt);
+        drop(lcp);
+        drop(sa);
+        let ef_links = Self::merge_links(dfs_results);
+        (cdawg_nodes, cdawg_edges, root_anchor, ef_links)
+    }
+
+    fn merge_links(dfs_results: Vec<EliasFano<u128>>) -> link::LinkEf {
+        let num_vals = dfs_results.iter().map(|x| x.len()).sum();
+
+        eprintln!(
+            "Total EF size before merging: {:.3} GB",
+            dfs_results
+                .iter()
+                .map(|ef| mem_dbg::MemSize::mem_size(ef, mem_dbg::SizeFlags::default()))
+                .sum::<usize>() as f32
+                / 1e9
+        );
+
+        eprintln!("Select pivots");
+        const NUM_PIVOTS: usize = 80;
+        const OVERSAMPLING: usize = 100;
+        // Oversample 100x to smoothen the distribution.
+        let mut pivot_idxs = (0..NUM_PIVOTS * OVERSAMPLING)
+            .map(|_| rand::random_range(0..num_vals))
+            .collect_vec();
+        pivot_idxs.sort_unstable();
+        pivot_idxs.dedup();
+
+        let mut pivots = vec![];
+        {
+            let mut i = 0;
+            let mut pivot_idx_iter = pivot_idxs.iter();
+            let mut next_pivot = *pivot_idx_iter.next().unwrap();
+            'outer: for ef in &dfs_results {
+                for x in ef.iter() {
+                    if i == next_pivot {
+                        pivots.push(x);
+                        next_pivot = match pivot_idx_iter.next() {
+                            Some(&idx) => idx,
+                            None => break 'outer,
+                        };
+                    }
+                    i += 1;
+                }
+            }
+            pivots.sort_unstable();
+            // Keep only every 100'th pivot
+            pivots = pivots
+                .into_iter()
+                .enumerate()
+                .filter(|(i, _)| i % OVERSAMPLING == 0)
+                .map(|(_, x)| x)
+                .collect_vec();
+            pivots.insert(0, 0);
+            pivots.push(u128::MAX);
+            pivots.dedup();
+        }
+
+        let efs_per_pivot: Vec<std::sync::Mutex<Vec<link::BareEf>>> = (0..pivots.len())
+            .map(|_| std::sync::Mutex::new(vec![]))
+            .collect();
+        let max = std::sync::Mutex::new(0u128);
+        eprintln!("Partitioning EFs");
+        dfs_results.into_par_iter().for_each(|ef| {
+            if ef.len() == 0 {
+                return;
+            }
+            let vals = ef.iter().collect_vec();
+            {
+                let mut max = max.lock().unwrap();
+                *max = (*max).max(*vals.last().unwrap());
+            }
+            let splits = pivots
+                .iter()
+                .map(|&p| vals.partition_point(|&x| x < p))
+                .collect_vec();
+            for i in 0..pivots.len() - 1 {
+                let bare_ef = link::BareEf::from(&vals[splits[i]..splits[i + 1]]);
+                efs_per_pivot[i].lock().unwrap().push(bare_ef);
+            }
+        });
+        let efs_per_pivot = efs_per_pivot
+            .into_iter()
+            .map(|m| m.into_inner().unwrap())
+            .collect_vec();
+        let max = max.into_inner().unwrap();
+        eprintln!(
+            "Total EF size after partitioning: {:.3} GB",
+            efs_per_pivot.iter().flatten().map(crate::gbs).sum::<f32>()
+        );
+
+        eprintln!("Build an EF for each part");
+        let part_efs: Vec<(u128, link::BareEf)> = efs_per_pivot
+            .into_par_iter()
+            .enumerate()
+            .map(|(_i, efs)| {
+                let mut vals = vec![];
+                // eprintln!(
+                //     "{i}: Merging {} EFs of total len {} total size {:.3}",
+                //     efs.len(),
+                //     efs.iter().map(|ef| ef.len()).sum::<usize>(),
+                //     efs.iter().map(crate::gbs).sum::<f32>()
+                // );
+                for ef in efs {
+                    vals.extend(ef.iter());
+                }
+                // eprintln!(
+                //     "{i}: vals size: {:.3} GB",
+                //     std::mem::size_of_val(vals.as_slice()) as f32 / 1e9
+                // );
+                vals.voracious_sort();
+                // vals.sort_unstable();
+                vals.dedup();
+                // eprintln!(
+                //     "{i}: vals size after dedup: {:.3} GB",
+                //     std::mem::size_of_val(vals.as_slice()) as f32 / 1e9
+                // );
+                let min = *vals.first().unwrap_or(&0);
+                for x in &mut *vals {
+                    *x -= min;
+                }
+                let out = link::BareEf::from(vals);
+                // eprintln!(
+                //     "{i}: output EF size: {:.3} GB",
+                //     mem_dbg::MemSize::mem_size(&out, mem_dbg::SizeFlags::default()) as f32
+                //         / 1e9
+                // );
+                (min, out)
+            })
+            .collect();
+        eprintln!(
+            "Total EF size after building parts: {:.3} GB",
+            part_efs
+                .iter()
+                .map(|(_min, ef)| mem_dbg::MemSize::mem_size(ef, mem_dbg::SizeFlags::default()))
+                .sum::<usize>() as f32
+                / 1e9
+        );
+
+        let n = part_efs.iter().map(|ef| ef.1.len()).sum::<usize>();
+        // eprintln!("Merge part EFs. Dedupped to {n} links");
+        let mut ef_builder = sux::dict::elias_fano::EliasFanoBuilder::<u128>::new(n, max);
+        for (min, part_ef) in part_efs {
+            // eprintln!(
+            //     "Extending by {} elems size {}",
+            //     part_ef.len(),
+            //     mem_dbg::MemSize::mem_size(&part_ef, mem_dbg::SizeFlags::default()) as f32
+            //         / 1e9
+            // );
+            ef_builder.extend(part_ef.iter().map(|x| x + min));
+        }
+        ef_builder.build_with_dict()
     }
 
     pub fn stats(&self) -> JumpIndexStats {
