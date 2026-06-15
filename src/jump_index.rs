@@ -3,7 +3,7 @@ use link::Link;
 use mem_dbg::MemSize;
 use std::{
     cmp::Ordering::{Greater, Less},
-    marker::Sync,
+    marker::{ConstParamTy, Sync},
     ops::Range,
 };
 use sux::{
@@ -24,7 +24,13 @@ use crate::{
 mod link;
 pub mod storage;
 
-pub struct JumpIndex<'t> {
+#[derive(PartialEq, Eq, ConstParamTy)]
+pub enum Pi {
+    LeftMost,
+    RightMost,
+}
+
+pub struct JumpIndex<'t, const PI: Pi> {
     pub t: &'t T,
     pub stpd_samples: Vec<usize>,
     pub stpd_pi: Vec<u64>,
@@ -45,7 +51,7 @@ pub struct JumpIndexStats {
     pub cdawg_edges: usize,
 }
 
-impl<'t> JumpIndex<'t> {
+impl<'t, const PI: Pi> JumpIndex<'t, PI> {
     pub fn new(t: &'t T) -> Self {
         let (sa, lcp) = sa_and_lcp_cached(t);
         let bwt = bwt(t, &sa);
@@ -55,6 +61,8 @@ impl<'t> JumpIndex<'t> {
 
     /// Take an already-built SA, BWT, and LCP.
     ///
+    /// These are AsRef so we can give owned objects and drop them as soon as
+    /// they are not needed anymore.
     pub fn new2<L: Lcp + Sync>(
         t: &'t T,
         sa: impl AsRef<SA> + Sync,
@@ -85,8 +93,10 @@ impl<'t> JumpIndex<'t> {
                     cdawg_nodes: &mut usize,
                     cdawg_edges: &mut usize|
          -> usize {
-            // FIXME MAX
-            let best = *anchors.iter().max_by_key(|a| permuted_pi[**a]).unwrap();
+            let best = match PI {
+                Pi::LeftMost => *anchors.iter().min_by_key(|a| permuted_pi[**a]).unwrap(),
+                Pi::RightMost => *anchors.iter().max_by_key(|a| permuted_pi[**a]).unwrap(),
+            };
             if single_run || anchors.len() == 1 {
                 return best;
             }
@@ -262,8 +272,14 @@ impl<'t> JumpIndex<'t> {
             eprintln!("Idx of min: {idx_of_min}");
             root_anchor = sa.as_ref()[idx_of_min] as usize;
             eprintln!("Root anchor: {root_anchor}");
-            // eprintln!("sa: {sa:?}");
-            // assert_eq!(root_anchor, sa.as_ref().len() - 1);
+            match PI {
+                Pi::LeftMost => {
+                    assert_eq!(root_anchor, 0);
+                }
+                Pi::RightMost => {
+                    assert_eq!(root_anchor, sa.as_ref().len() - 1);
+                }
+            }
         }
         {
             // Collect links from top layers.
@@ -726,7 +742,10 @@ impl<'t> JumpIndex<'t> {
             let p1 = self.map_jump(pattern).0;
             assert!(p1.len() == pattern.len(), "substring {i}..{j} not found");
             let pos = p1.start;
-            assert!(pos <= i, "substring {i}..{j} found at pos {pos}");
+            match PI {
+                Pi::LeftMost => assert!(pos <= i, "substring {i}..{j} found at pos {pos}"),
+                Pi::RightMost => assert!(pos >= i, "substring {i}..{j} found at pos {pos}"),
+            }
             // eprintln!("substring {i}..{j} found at pos {pos}");
         }
     }
@@ -812,7 +831,7 @@ mod test {
             eprintln!("text: {}", print(&t));
 
             eprintln!("building for {len}x{repeats} at {r}..");
-            let ji = JumpIndex::new(&t);
+            let ji = JumpIndex::<{ Pi::LeftMost }>::new(&t);
 
             // find a bunch of random substrings
             eprintln!("querying..");

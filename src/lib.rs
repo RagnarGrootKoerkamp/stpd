@@ -1,7 +1,7 @@
-#![feature(gen_blocks, bstr, vec_from_fn)]
+#![feature(gen_blocks, bstr, vec_from_fn, min_adt_const_params)]
 use std::{cmp::{Reverse}, collections::{HashMap, HashSet}, hash::{Hash, Hasher}};
 use itertools::Itertools;
-use jump_index::JumpIndexStats;
+use jump_index::{JumpIndexStats, Pi};
 use lcp::{Lcp, PlainLcp};
 use rand::{rng, seq::SliceRandom};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
@@ -464,7 +464,7 @@ pub fn stpd(t: &T, _sa: &SA, _lcp: &impl Lcp, perm: &Vec<usize>) -> usize {
 }
 
 pub fn jump_index(t: &T) {
-    let jump_index = jump_index::JumpIndex::new(t);
+    let jump_index = jump_index::JumpIndex::<{Pi::LeftMost}>::new(t);
 
     // let JumpIndexStats { num_sampled, num_sources, num_source_chars, num_links, cdawg_nodes, cdawg_edges } = jump_index.stats();
 
@@ -487,7 +487,7 @@ pub fn jump_index(t: &T) {
 
 
 pub fn stpd_fast(t: &T, sa: &SA, bwt: &T, lcp: &impl Lcp, pi: &SA) -> usize {
-    let jump_index = jump_index::JumpIndex::new2(t, sa, bwt, lcp, pi);
+    let jump_index = jump_index::JumpIndex::<{Pi::LeftMost}>::new2(t, sa, bwt, lcp, pi);
 
     let JumpIndexStats { num_sampled, num_sources, num_source_chars, num_links, cdawg_nodes, cdawg_edges } = jump_index.stats();
 
