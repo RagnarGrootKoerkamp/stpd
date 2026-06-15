@@ -3,8 +3,8 @@ use std::{cmp::{Reverse}, collections::{HashMap, HashSet}, hash::{Hash, Hasher}}
 use itertools::Itertools;
 use jump_index::{JumpIndexStats, Pi};
 use lcp::{Lcp, PlainLcp};
-use rand::{rng, seq::SliceRandom};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+
 
 use tikv_jemallocator::Jemalloc;
 
@@ -488,8 +488,8 @@ pub fn jump_index(t: &T) {
 }
 
 
-pub fn stpd_fast(t: &T, sa: &SA, bwt: &T, lcp: &impl Lcp, pi: &SA) -> usize {
-    let jump_index = jump_index::JumpIndex::<{Pi::LeftMost}>::new2(t, sa, bwt, lcp, pi);
+pub fn stpd_via_jump_index<const PI: Pi>(t: &T, sa: &SA, bwt: &T, lcp: &impl Lcp) -> usize {
+    let jump_index = jump_index::JumpIndex::<PI>::new2(t, sa, bwt, lcp);
 
     let JumpIndexStats { num_sampled, num_sources, num_source_chars, num_links, cdawg_nodes, cdawg_edges } = jump_index.stats();
 
@@ -508,55 +508,27 @@ pub fn stpd_fast(t: &T, sa: &SA, bwt: &T, lcp: &impl Lcp, pi: &SA) -> usize {
 }
 
 pub fn stpd_pos_minus(t: &T, sa: &SA, bwt: &T, lcp: &impl Lcp) -> usize {
-    // let perm = (0..t.len()).collect_vec();
-    let perm = vec![];
-    stpd_fast(t, sa, bwt, lcp, &perm)
+    stpd_via_jump_index::<{Pi::LeftMost}>(t, sa, bwt, lcp)
 }
 
 pub fn stpd_pos_plus(t: &T, sa: &SA,  bwt: &T,lcp: &impl Lcp) -> usize {
-    let perm = (0..t.len() as SaElem).rev().collect_vec();
-    stpd_fast(t, sa, bwt, lcp, &perm)
+    stpd_via_jump_index::<{Pi::RightMost}>(t, sa, bwt, lcp)
 }
 
 pub fn stpd_lex_minus(t: &T, sa: &SA,  bwt: &T,lcp: &impl Lcp) -> usize {
-    let mut isa = vec![0; t.len()];
-    for (i, &x) in sa.iter().enumerate(){
-        isa[x as usize] = i as SaElem;
-    }
-    stpd_fast(t, sa, bwt, lcp, &isa)
+    todo!();
 }
 
 pub fn stpd_lex_plus(t: &T, sa: &SA,  bwt: &T,lcp: &impl Lcp) -> usize {
-    let mut isa = vec![0; t.len()];
-    for (i, &x) in sa.iter().enumerate(){
-        isa[x as usize] = (t.len()-1-i) as SaElem;
-    }
-    stpd_fast(t, sa, bwt, lcp, &isa)
+    todo!();
 }
 
 pub fn stpd_colex_minus(t: &T, sa: &SA,  bwt: &T,lcp: &impl Lcp) -> usize {
-    let co_sa = co_sa(t);
-    let mut i_co_sa = vec![0; t.len()];
-    for (i, &x) in co_sa.iter().enumerate(){
-        i_co_sa[x as usize] = i as SaElem;
-    }
-    stpd_fast(t, sa, bwt, lcp, &i_co_sa)
+    todo!();
 }
 
 pub fn stpd_colex_plus(t: &T, sa: &SA,  bwt: &T,lcp: &impl Lcp) -> usize {
-    let co_sa = co_sa(t);
-    let mut i_co_sa = vec![0; t.len()];
-    for (i, &x) in co_sa.iter().enumerate(){
-        i_co_sa[x as usize] = (t.len()-1-i) as SaElem;
-    }
-    stpd_fast(t, sa, bwt, lcp, &i_co_sa)
-}
-
-
-pub fn stpd_rand(t: &T, sa: &SA, bwt: &T, lcp: &impl Lcp) -> usize {
-    let mut perm = (0..t.len() as SaElem).collect_vec();
-    perm.shuffle(&mut rng());
-    stpd_fast(t, sa, bwt, lcp, &perm)
+    todo!();
 }
 
 pub fn plcp(t: &T, sa: &SA, lcp: &impl Lcp) -> usize {

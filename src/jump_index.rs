@@ -56,8 +56,7 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
     pub fn new(t: &'t T) -> Self {
         let (sa, lcp) = sa_and_lcp_cached(t);
         let bwt = bwt(t, &sa);
-        // let pi = (0..t.len()).collect_vec();
-        Self::new2(t, sa, bwt, lcp, &vec![])
+        Self::new2(t, sa, bwt, lcp)
     }
 
     /// Take an already-built SA, BWT, and LCP.
@@ -69,7 +68,6 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
         sa: impl AsRef<SA> + Sync + std::fmt::Debug,
         bwt: impl AsRef<T> + Sync,
         lcp: impl AsRef<L> + Sync,
-        pi: &SA,
     ) -> Self {
         let n = t.len();
         // eprintln!("SA: {:?}", sa.as_ref());
@@ -77,14 +75,6 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
         // "LCP: {:?}",
         // (0..n).map(|i| lcp.get(sa.as_ref(), i)).collect_vec()
         // );
-
-        // empty indicates pi=identity and permuted_pi = sa.
-        let permuted_pi: &SA = if pi.is_empty() {
-            &sa.as_ref()
-        } else {
-            eprintln!("permuting pi..");
-            &sa.as_ref().par_iter().map(|&i| pi[i as usize]).collect()
-        };
 
         // Find the best anchor of the set, add links to the others, and return the best.
         let link = |anchors: &[usize],
@@ -95,8 +85,8 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
                     cdawg_edges: &mut usize|
          -> usize {
             let best = match PI {
-                Pi::LeftMost => *anchors.iter().min_by_key(|a| permuted_pi[**a]).unwrap(),
-                Pi::RightMost => *anchors.iter().max_by_key(|a| permuted_pi[**a]).unwrap(),
+                Pi::LeftMost => *anchors.iter().min_by_key(|a| sa.as_ref()[**a]).unwrap(),
+                Pi::RightMost => *anchors.iter().max_by_key(|a| sa.as_ref()[**a]).unwrap(),
             };
             // eprintln!("single run: {single_run:?}");
             if single_run || anchors.len() == 1 {
@@ -542,9 +532,9 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
 
         // Note: replace by the set of all jump targets if needed.
         // Then, sort co-lex and dedup.
+        // let stpd_pi: Vec<u64> = stpd_samples.iter().map(|&x| pi[x] as u64).collect();
         let stpd_samples = vec![];
-
-        let stpd_pi: Vec<u64> = stpd_samples.iter().map(|&x| pi[x] as u64).collect();
+        let stpd_pi = vec![];
 
         JumpIndex {
             t,
