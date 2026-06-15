@@ -24,7 +24,7 @@ use crate::{
 mod link;
 pub mod storage;
 
-#[derive(PartialEq, Eq, ConstParamTy)]
+#[derive(PartialEq, Eq, ConstParamTy, Debug)]
 pub enum Pi {
     LeftMost,
     RightMost,
@@ -812,6 +812,11 @@ mod test {
 
     #[test]
     fn test() {
+        test_direction::<{ Pi::LeftMost }>();
+        // test_direction::<{ Pi::RightMost }>();
+    }
+    fn test_direction<const PI: Pi>() {
+        eprintln!("--- TESTING {PI:?} ---");
         let mut t1 = std::time::Duration::default();
         let mut t2 = std::time::Duration::default();
         for (len, repeats, r) in [
@@ -831,34 +836,91 @@ mod test {
             eprintln!("text: {}", print(&t));
 
             eprintln!("building for {len}x{repeats} at {r}..");
-            let ji = JumpIndex::<{ Pi::LeftMost }>::new(&t);
+            let ji = JumpIndex::<PI>::new(&t);
 
-            // find a bunch of random substrings
+            let maxlen = t.len().min(1000);
             eprintln!("querying..");
-            for len in 0..=len.min(1000) {
+            for _id in 0..100000 {
+                let len = rand::random_range(0..=maxlen);
+
                 let pos = rand::random_range(0..=t.len() - len);
                 let pattern = &t[pos..pos + len];
 
-                eprintln!("pattern: {}", print(pattern));
+                eprintln!(
+                    "pattern for {PI:?}: T[{pos}..{pos}+{len}] = {}",
+                    print(pattern)
+                );
 
+                // let s = std::time::Instant::now();
+                // let p1 = ji.map_stpd(pattern);
+                // eprintln!("p1: {p1:?}");
+                // t1 += s.elapsed();
                 let s = std::time::Instant::now();
-                let p1 = ji.map_stpd(pattern);
-                t1 += s.elapsed();
-                let s = std::time::Instant::now();
-                let p2 = ji.map_jump(pattern).0.start;
+                let p2 = ji.map_jump(pattern).0;
                 t2 += s.elapsed();
-                eprintln!("p1: {p1:?}");
                 eprintln!("p2: {p2:?}");
-                let p1 = p1.unwrap();
-                let p2 = p2;
+                assert_eq!(p2.len(), len, "Did not match the full pattern!");
 
-                assert_eq!(&t[p1..p1 + len], pattern);
-                assert_eq!(&t[p2..p2 + len], pattern);
-                assert_eq!(p1, p2);
+                match PI {
+                    Pi::LeftMost => {
+                        assert!(
+                            p2.start <= pos,
+                            "substring {pos}..{pos}+{len} found at pos {p2:?}"
+                        )
+                    }
+                    Pi::RightMost => {
+                        assert!(
+                            p2.start >= pos,
+                            "substring {pos}..{pos}+{len} found at pos {p2:?}"
+                        )
+                    }
+                }
+
+                // let p1 = p1.unwrap();
+                // let p2 = p2;
+
+                // assert_eq!(&t[p1..p1 + len], pattern);
+                if &t[p2.clone()] != pattern {
+                    eprintln!("Pattern T[{pos}..{pos}+{len}] does not match text T[{p2:?}] for JI<{PI:?}>!");
+                    eprintln!("pattern: {}", print(pattern));
+                    eprintln!("text:    {}", print(&t[p2]));
+                    panic!();
+                }
+                // assert_eq!(p1, p2);
             }
         }
         eprintln!("STPD: {t1:?}");
         eprintln!("JI:   {t2:?}");
+    }
+
+    /// Error: Missing link for CCA at pos 2.
+    #[test]
+    fn failure_one() {
+        const PI: Pi = Pi::LeftMost;
+        let t = b"CCBDDACADDCCADDACBDD".to_vec();
+        eprintln!("text: {}", print(&t));
+
+        let ji = JumpIndex::<PI>::new(&t);
+        let pos = 10;
+        let len = 9;
+        let pattern = &t[pos..pos + len];
+
+        eprintln!(
+            "pattern for {PI:?}: T[{pos}..{pos}+{len}] = {}",
+            print(pattern)
+        );
+
+        let p2 = ji.map_jump(pattern).0;
+        assert_eq!(p2.len(), len, "Did not match the full pattern!");
+
+        if &t[p2.clone()] != pattern {
+            eprintln!(
+                "Pattern T[{pos}..{pos}+{len}] does not match text T[{p2:?}] for JI<{PI:?}>!"
+            );
+            eprintln!("pattern: {}", print(pattern));
+            eprintln!("text:    {}", print(&t[p2]));
+            panic!();
+        }
     }
 }
 

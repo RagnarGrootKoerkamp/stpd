@@ -41,16 +41,19 @@ impl Link {
         assert!(LINK_BITS <= 128);
         assert!(
             source < (1 << SOURCE_BITS),
-            "link {source},{c} -> {lcp},{target}"
+            "link {source},{c} -> {lcp},{target}: Source too large"
         );
         assert!(
             (c as usize) < (1 << C_BITS),
-            "link {source},{c} -> {lcp},{target}"
+            "link {source},{c} -> {lcp},{target}: character too large"
         );
-        assert!(lcp < (1 << LCP_BITS), "link {source},{c} -> {lcp},{target}");
+        assert!(
+            lcp < (1 << LCP_BITS),
+            "link {source},{c} -> {lcp},{target}: LCP too large"
+        );
         assert!(
             target < (1 << TARGET_BITS),
-            "link {source},{c} -> {lcp},{target}"
+            "link {source},{c} -> {lcp},{target}: target too large"
         );
 
         let data = ((source as u128) << (C_BITS + LCP_BITS + TARGET_BITS))
