@@ -3,7 +3,7 @@ use link::Link;
 use mem_dbg::MemSize;
 use std::{
     cmp::Ordering::{Greater, Less},
-    marker::{ConstParamTy, Sync},
+    marker::ConstParamTy,
     ops::Range,
 };
 #[allow(unused)]
@@ -19,7 +19,7 @@ use crate::{
     rmq::{self, Rmq},
     sa_and_lcp_cached,
     stpd::cmp_colex,
-    SA, T,
+    T,
 };
 
 mod link;
@@ -53,27 +53,20 @@ pub struct JumpIndexStats {
 }
 
 impl<'t, const PI: Pi> JumpIndex<'t, PI> {
-    pub fn new(t: &'t T) -> Self {
-        let (sa, lcp) = sa_and_lcp_cached(t);
-        let bwt = bwt(t, &sa);
-        Self::new2(t, sa, bwt, lcp)
-    }
-
     /// Take an already-built SA, BWT, and LCP.
     ///
     /// These are AsRef so we can give owned objects and drop them as soon as
     /// they are not needed anymore.
-    pub fn new2<L: Lcp + Sync>(
-        t: &'t T,
-        sa: impl AsRef<SA> + Sync + std::fmt::Debug,
-        bwt: impl AsRef<T> + Sync,
-        lcp: impl AsRef<L> + Sync,
-    ) -> Self {
+    pub fn new(t: &'t T) -> Self {
         let n = t.len();
-        // eprintln!("SA: {:?}", sa.as_ref());
+
+        let (sa, lcp) = sa_and_lcp_cached(t);
+        let bwt = bwt(t, &sa);
+
+        // eprintln!("SA: {:?}", sa);
         // eprintln!(
         // "LCP: {:?}",
-        // (0..n).map(|i| lcp.get(sa.as_ref(), i)).collect_vec()
+        // (0..n).map(|i| lcp.get(sa, i)).collect_vec()
         // );
 
         // Find the best anchor of the set, add links to the others, and return the best.
@@ -85,8 +78,8 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
                     cdawg_edges: &mut usize|
          -> usize {
             let best = match PI {
-                Pi::LeftMost => *anchors.iter().min_by_key(|a| sa.as_ref()[**a]).unwrap(),
-                Pi::RightMost => *anchors.iter().max_by_key(|a| sa.as_ref()[**a]).unwrap(),
+                Pi::LeftMost => *anchors.iter().min_by_key(|a| sa[**a]).unwrap(),
+                Pi::RightMost => *anchors.iter().max_by_key(|a| sa[**a]).unwrap(),
             };
             // eprintln!("single run: {single_run:?}");
             if single_run || anchors.len() == 1 {
@@ -98,12 +91,12 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
                 if a == best {
                     continue;
                 }
-                let text_idx = sa.as_ref()[a] as usize;
+                let text_idx = sa[a] as usize;
                 let target = text_idx + lcp as usize;
                 // TODO: Why do we need this if statement?
                 if target < t.len() {
                     // sa[best] is HOT.
-                    let source = sa.as_ref()[best] as usize + lcp as usize;
+                    let source = sa[best] as usize + lcp as usize;
                     let c = t[target];
                     links.push(link::Link::new(
                         source,
@@ -134,15 +127,15 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
             let mut run_start = interval.start;
             for i in interval.clone() {
                 // New run?
-                if i > 0 && bwt.as_ref()[i] != bwt.as_ref()[i - 1] {
+                if i > 0 && bwt[i] != bwt[i - 1] {
                     run_start = i;
                 }
                 // Same run, but one wraps around the text?
-                if sa.as_ref()[i] == 0 || (i > 0 && sa.as_ref()[i - 1] == 0) {
+                if sa[i] == 0 || (i > 0 && sa[i - 1] == 0) {
                     run_start = i;
                 }
 
-                let l = lcp.as_ref().get(sa.as_ref(), i);
+                let l = lcp.get(&sa, i);
                 // eprintln!("{i} => {l}");
 
                 let mut last_start = i;
@@ -183,12 +176,12 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
         const PREFIX_LCP: u32 = 3;
         // eprintln!("Collecting intervals with LCP > {PREFIX_LCP}");
         // eprintln!("SA:  {sa:?}");
-        // for (i, x) in sa.as_ref().iter().enumerate() {
+        // for (i, x) in sa.iter().enumerate() {
         // eprintln!("{i:>3} {x:>3}: {}", crate::print(&t[*x as usize..]));
         // }
         let intervals: Vec<usize> = (0..=n)
             .into_par_iter()
-            .filter(|&i| i == 0 || lcp.as_ref().get(sa.as_ref(), i - 1) <= PREFIX_LCP)
+            .filter(|&i| i == 0 || lcp.get(&sa, i - 1) <= PREFIX_LCP)
             .collect();
         // eprintln!("intervals: {intervals:?}");
 
@@ -248,15 +241,15 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
                     // let end_idx = start_idx + 1;
                     let start = intervals[start_idx];
                     let end = intervals[end_idx];
-                    if lcp.as_ref().get(sa.as_ref(), end - 1) < cur_lcp {
+                    if lcp.get(&sa, end - 1) < cur_lcp {
                         // eprintln!("intervals[{start_idx}..{end_idx}]");
                         // eprintln!("sa[{start}..{end}]");
                         new_intervals.push(end);
                         new_anchors.push(link(
                             &anchors[start_idx..end_idx],
                             cur_lcp,
-                            bwt.as_ref()[start..end].iter().all_equal()
-                                && sa.as_ref()[start..end].iter().all(|&x| x != 0),
+                            bwt[start..end].iter().all_equal()
+                                && sa[start..end].iter().all(|&x| x != 0),
                             &mut links,
                             &mut cdawg_nodes,
                             &mut cdawg_edges,
@@ -272,20 +265,20 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
             let idx_of_min = link(
                 &anchors,
                 0,
-                bwt.as_ref().iter().all_equal(),
+                bwt.iter().all_equal(),
                 &mut links,
                 &mut cdawg_nodes,
                 &mut cdawg_edges,
             );
             eprintln!("Idx of min: {idx_of_min}");
-            root_anchor = sa.as_ref()[idx_of_min] as usize;
+            root_anchor = sa[idx_of_min] as usize;
             eprintln!("Root anchor: {root_anchor}");
             match PI {
                 Pi::LeftMost => {
                     assert_eq!(root_anchor, 0);
                 }
                 Pi::RightMost => {
-                    assert_eq!(root_anchor, sa.as_ref().len() - 1);
+                    assert_eq!(root_anchor, sa.len() - 1);
                 }
             }
         }

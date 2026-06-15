@@ -62,6 +62,7 @@ pub fn sa(t: &T) -> SA {
         .collect()
 }
 
+#[allow(unused)]
 fn co_sa(t: &T) -> SA {
     let tr = t.iter().rev().copied().collect_vec();
     let co_sa = sa(&tr);
@@ -488,8 +489,8 @@ pub fn jump_index(t: &T) {
 }
 
 
-pub fn stpd_via_jump_index<const PI: Pi>(t: &T, sa: &SA, bwt: &T, lcp: &impl Lcp) -> usize {
-    let jump_index = jump_index::JumpIndex::<PI>::new2(t, sa, bwt, lcp);
+pub fn stpd_via_jump_index<const PI: Pi>(t: &T) -> usize {
+    let jump_index = jump_index::JumpIndex::<PI>::new(t);
 
     let JumpIndexStats { num_sampled, num_sources, num_source_chars, num_links, cdawg_nodes, cdawg_edges } = jump_index.stats();
 
@@ -507,27 +508,27 @@ pub fn stpd_via_jump_index<const PI: Pi>(t: &T, sa: &SA, bwt: &T, lcp: &impl Lcp
     num_sampled
 }
 
-pub fn stpd_pos_minus(t: &T, sa: &SA, bwt: &T, lcp: &impl Lcp) -> usize {
-    stpd_via_jump_index::<{Pi::LeftMost}>(t, sa, bwt, lcp)
+pub fn stpd_pos_minus(t: &T) -> usize {
+    stpd_via_jump_index::<{Pi::LeftMost}>(t)
 }
 
-pub fn stpd_pos_plus(t: &T, sa: &SA,  bwt: &T,lcp: &impl Lcp) -> usize {
-    stpd_via_jump_index::<{Pi::RightMost}>(t, sa, bwt, lcp)
+pub fn stpd_pos_plus(t: &T) -> usize {
+    stpd_via_jump_index::<{Pi::RightMost}>(t)
 }
 
-pub fn stpd_lex_minus(t: &T, sa: &SA,  bwt: &T,lcp: &impl Lcp) -> usize {
+pub fn stpd_lex_minus(_t: &T) -> usize {
     todo!();
 }
 
-pub fn stpd_lex_plus(t: &T, sa: &SA,  bwt: &T,lcp: &impl Lcp) -> usize {
+pub fn stpd_lex_plus(_t: &T) -> usize {
     todo!();
 }
 
-pub fn stpd_colex_minus(t: &T, sa: &SA,  bwt: &T,lcp: &impl Lcp) -> usize {
+pub fn stpd_colex_minus(_t: &T) -> usize {
     todo!();
 }
 
-pub fn stpd_colex_plus(t: &T, sa: &SA,  bwt: &T,lcp: &impl Lcp) -> usize {
+pub fn stpd_colex_plus(_t: &T) -> usize {
     todo!();
 }
 
