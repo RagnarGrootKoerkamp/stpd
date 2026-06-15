@@ -6,7 +6,10 @@ use std::{
     marker::Sync,
     ops::Range,
 };
-use sux::{dict::EliasFano, traits::Succ};
+use sux::{
+    dict::EliasFano,
+    traits::{Pred, Succ},
+};
 use voracious_radix_sort::RadixSort;
 
 use crate::{
@@ -28,6 +31,7 @@ pub struct JumpIndex<TR: AsRef<T>> {
     pub stpd_rmq: rmq::BlockRmq<u64, 64>,
     // TODO: Predecessor structure
     pub ef_links: link::LinkEf,
+    pub root_anchor: usize,
     pub cdawg_nodes: usize,
     pub cdawg_edges: usize,
 }
@@ -81,7 +85,8 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                     cdawg_nodes: &mut usize,
                     cdawg_edges: &mut usize|
          -> usize {
-            let best = *anchors.iter().min_by_key(|a| permuted_pi[**a]).unwrap();
+            // FIXME MAX
+            let best = *anchors.iter().max_by_key(|a| permuted_pi[**a]).unwrap();
             if single_run || anchors.len() == 1 {
                 return best;
             }
@@ -217,6 +222,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
         let mut cdawg_nodes = 1; // the final node
         let mut cdawg_edges = 0;
         // Process the top few layers.
+        let root_anchor;
         {
             let mut intervals = intervals;
             let mut anchors: Vec<_> = dfs_results.iter().map(|x| x.0).collect();
@@ -248,7 +254,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                 // eprintln!("Intervals: {intervals:?}");
                 // eprintln!("Anchors:   {anchors:?}");
             }
-            let min = link(
+            let idx_of_min = link(
                 &anchors,
                 0,
                 bwt.as_ref().iter().all_equal(),
@@ -256,7 +262,11 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                 &mut cdawg_nodes,
                 &mut cdawg_edges,
             );
-            assert_eq!(sa.as_ref()[min], 0);
+            eprintln!("Idx of min: {idx_of_min}");
+            root_anchor = sa.as_ref()[idx_of_min] as usize;
+            eprintln!("Root anchor: {root_anchor}");
+            // eprintln!("sa: {sa:?}");
+            // assert_eq!(root_anchor, sa.as_ref().len() - 1);
         }
         {
             // Collect links from top layers.
@@ -429,6 +439,12 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
             ef_builder.build_with_dict()
         };
 
+        if ef_links.len() < 100 {
+            for l in ef_links.iter() {
+                eprintln!("link {:?}", Link::from_key(l));
+            }
+        }
+
         eprintln!("---");
         eprintln!("final EF size: {}", print_ef(&ef_links));
         eprintln!("---");
@@ -505,6 +521,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
             stpd_rmq: rmq::BlockRmq::build(stpd_pi.as_slice()),
             stpd_pi,
             ef_links,
+            root_anchor,
             cdawg_nodes,
             cdawg_edges,
         }
@@ -643,20 +660,21 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
     /// Also returns the total number of jumps.
     pub fn map_jump(&self, pattern: &[u8]) -> (Range<usize>, usize) {
         // eprintln!("searching for {pattern:?}");
-        let mut pos = 0;
+        let mut pos = self.root_anchor;
         let mut jumps = 0;
         for (i, &c) in pattern.iter().enumerate() {
-            if pos == self.t.as_ref().len() {
-                return (pos - i..pos, jumps);
-            }
-            if self.t.as_ref()[pos] == c {
+            if pos < self.t.as_ref().len() && self.t.as_ref()[pos] == c {
                 pos += 1;
                 continue;
             }
-            // eprintln!(
-            //     "{i}: mismatch at {pos}: got {} wanted {c}",
-            //     self.t.as_ref()[pos]
-            // );
+            if pos < self.t.as_ref().len() {
+                eprintln!(
+                    "{i}: mismatch at {pos}: got {} wanted {c}",
+                    self.t.as_ref()[pos]
+                );
+            } else {
+                eprintln!("{i}: mismatch at {pos}: got end of text wanted {c}",);
+            }
 
             // find the first link at (pos, c) with LCP >= i.
             let Some((_idx, link)) = self.ef_links.succ(&link::Link::new(pos, c, i, 0).key())
@@ -672,6 +690,11 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                 pos = link.target() + 1;
             } else {
                 // eprintln!("no link found; next is {link:?}");
+                // if let Some((_idx, link)) = self.ef_links.pred(&link::Link::new(pos, c, i, 0).key())
+                // {
+                //     let link = link::Link::from_key(link);
+                //     eprintln!("prev link: {link:?}");
+                // }
                 return (pos - i..pos, jumps);
             }
         }
