@@ -24,8 +24,8 @@ use crate::{
 mod link;
 pub mod storage;
 
-pub struct JumpIndex<TR: AsRef<T>> {
-    pub t: TR,
+pub struct JumpIndex<'t> {
+    pub t: &'t T,
     pub stpd_samples: Vec<usize>,
     pub stpd_pi: Vec<u64>,
     pub stpd_rmq: rmq::BlockRmq<u64, 64>,
@@ -45,24 +45,24 @@ pub struct JumpIndexStats {
     pub cdawg_edges: usize,
 }
 
-impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
-    pub fn new(t: TR) -> Self {
-        let (sa, lcp) = sa_and_lcp_cached(t.as_ref());
-        let bwt = bwt(t.as_ref(), &sa);
-        // let pi = (0..t.as_ref().len()).collect_vec();
+impl<'t> JumpIndex<'t> {
+    pub fn new(t: &'t T) -> Self {
+        let (sa, lcp) = sa_and_lcp_cached(t);
+        let bwt = bwt(t, &sa);
+        // let pi = (0..t.len()).collect_vec();
         Self::new2(t, sa, bwt, lcp, &vec![])
     }
 
     /// Take an already-built SA, BWT, and LCP.
     ///
     pub fn new2<L: Lcp + Sync>(
-        t: TR,
+        t: &'t T,
         sa: impl AsRef<SA> + Sync,
         bwt: impl AsRef<T> + Sync,
         lcp: impl AsRef<L> + Sync,
         pi: &SA,
     ) -> Self {
-        let n = t.as_ref().len();
+        let n = t.len();
         // eprintln!("SA: {:?}", sa.as_ref());
         // eprintln!(
         // "LCP: {:?}",
@@ -99,19 +99,16 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                 let text_idx = sa.as_ref()[a] as usize;
                 let target = text_idx + lcp as usize;
                 // TODO: Why do we need this if statement?
-                if target < t.as_ref().len() {
+                if target < t.len() {
                     // sa[best] is HOT.
                     let source = sa.as_ref()[best] as usize + lcp as usize;
-                    let c = t.as_ref()[target];
+                    let c = t[target];
                     links.push(link::Link::new(
                         source,
                         c,
                         // co_lcp is HOT.
                         lcp as usize
-                            + lcs(
-                                &t.as_ref()[..source - lcp as usize],
-                                &t.as_ref()[..target - lcp as usize],
-                            ),
+                            + lcs(&t[..source - lcp as usize], &t[..target - lcp as usize]),
                         target,
                     ));
                 }
@@ -618,7 +615,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
     pub fn map_stpd(&self, pattern: &[u8]) -> Option<usize> {
         let mut pos = 0;
         for (i, &c) in pattern.iter().enumerate() {
-            if self.t.as_ref()[pos] == c {
+            if self.t[pos] == c {
                 pos += 1;
                 continue;
             }
@@ -627,7 +624,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
             let idx1 = self
                 .stpd_samples
                 .binary_search_by(|&sample_pos| {
-                    match cmp_colex(&self.t.as_ref()[..=sample_pos], &pattern[..=i]).1 {
+                    match cmp_colex(&self.t[..=sample_pos], &pattern[..=i]).1 {
                         std::cmp::Ordering::Equal => Greater,
                         x => x,
                     }
@@ -636,7 +633,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
             let idx2 = self
                 .stpd_samples
                 .binary_search_by(|&sample_pos| {
-                    match cmp_colex(&self.t.as_ref()[..=sample_pos], &pattern[..=i]).1 {
+                    match cmp_colex(&self.t[..=sample_pos], &pattern[..=i]).1 {
                         std::cmp::Ordering::Equal => Less,
                         x => x,
                     }
@@ -663,18 +660,15 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
         let mut pos = self.root_anchor;
         let mut jumps = 0;
         for (i, &c) in pattern.iter().enumerate() {
-            if pos < self.t.as_ref().len() && self.t.as_ref()[pos] == c {
+            if pos < self.t.len() && self.t[pos] == c {
                 pos += 1;
                 continue;
             }
-            if pos < self.t.as_ref().len() {
-                eprintln!(
-                    "{i}: mismatch at {pos}: got {} wanted {c}",
-                    self.t.as_ref()[pos]
-                );
-            } else {
-                eprintln!("{i}: mismatch at {pos}: got end of text wanted {c}",);
-            }
+            // if pos < self.t.len() {
+            //     eprintln!("{i}: mismatch at {pos}: got {} wanted {c}", self.t[pos]);
+            // } else {
+            //     eprintln!("{i}: mismatch at {pos}: got end of text wanted {c}",);
+            // }
 
             // find the first link at (pos, c) with LCP >= i.
             let Some((_idx, link)) = self.ef_links.succ(&link::Link::new(pos, c, i, 0).key())
@@ -724,9 +718,10 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
         let len = 1..self.t.len().min(5000);
         for _ in 0..cnt {
             let len = rand::random_range(len.clone());
-            let i = rand::random_range(0..=self.t.as_ref().len() - len);
+            let i = rand::random_range(0..=self.t.len() - len);
             let j = i + len;
-            let pattern = &self.t.as_ref()[i..j];
+
+            let pattern = &self.t[i..j];
             // eprintln!("Searching pattern T[{i}..{i}+{len}]");
             let p1 = self.map_jump(pattern).0;
             assert!(p1.len() == pattern.len(), "substring {i}..{j} not found");
@@ -745,9 +740,9 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
             let mut patterns = vec![];
             for it in 0..cnt {
                 let len = rand::random_range(len.clone());
-                let i = rand::random_range(0..=self.t.as_ref().len() - len);
+                let i = rand::random_range(0..=self.t.len() - len);
                 let j = i + len;
-                let mut pattern = self.t.as_ref()[i..j].to_vec();
+                let mut pattern = self.t[i..j].to_vec();
                 // randomly permute 1% of values.
                 for _ in 0..(len as f32 * rate) as usize {
                     let idx = rand::random_range(0..len);
