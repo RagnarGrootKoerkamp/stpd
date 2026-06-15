@@ -720,13 +720,14 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
 
     /// Take a bunch of random substrings and map them against the text.
     pub fn test_map(&self) {
-        let cnt = 1000000;
-        let len = 1..1000;
+        let cnt = 10000000;
+        let len = 1..self.t.len().min(5000);
         for _ in 0..cnt {
             let len = rand::random_range(len.clone());
             let i = rand::random_range(0..=self.t.as_ref().len() - len);
             let j = i + len;
             let pattern = &self.t.as_ref()[i..j];
+            // eprintln!("Searching pattern T[{i}..{i}+{len}]");
             let p1 = self.map_jump(pattern).0;
             assert!(p1.len() == pattern.len(), "substring {i}..{j} not found");
             let pos = p1.start;
