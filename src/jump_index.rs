@@ -702,9 +702,9 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
         (pos - pattern.len()..pos, jumps)
     }
 
-    /// Pseudo matching lengths.
+    /// Relative Lempel-Ziv.
     /// Repeatedly greedily matches a longest prefix of the remaining pattern.
-    pub fn map_pml(&self, pattern: &[u8]) -> (usize, usize) {
+    pub fn map_rlz(&self, pattern: &[u8]) -> (usize, usize) {
         let mut start = 0;
         let mut parts = 0;
         let mut jumps = 0;
@@ -736,9 +736,9 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
     }
 
     /// Take a bunch of random substrings and map them against the text.
-    pub fn bench_pml(&self) {
-        let cnt = 10000;
-        let len = 1..5000;
+    pub fn bench_rlz(&self) {
+        let cnt = 100000;
+        let len = 1..5000.min(self.t.len());
 
         for rate in [0.01, 0.001] {
             let mut patterns = vec![];
@@ -758,7 +758,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
             let mut parts = 0;
             let mut jumps = 0;
             for (it, pattern) in patterns.iter().enumerate() {
-                let (ps, js) = self.map_pml(&pattern);
+                let (ps, js) = self.map_rlz(&pattern);
                 parts += ps;
                 jumps += js;
             }
@@ -769,7 +769,7 @@ impl<TR: AsRef<T> + Sync> JumpIndex<TR> {
                 patterns.iter().map(|p| p.len()).sum::<usize>() as f32 / jumps as f32;
             let avg_jumps_per_part = jumps as f32 / parts as f32;
             eprintln!(
-                "PML: {:.3} for {} reads of average length 2500 with {:4.2}% errors. Avg {:6.0} reads/sec. Avg part len: {avg_part_len:6.1}, avg jump dist: {avg_jump_dist:6.1}, avg jumps/part: {avg_jumps_per_part:6.2}",
+                "RLZ: {:.3} for {} reads of average length 2500 with {:4.2}% errors. Avg {:6.0} reads/sec. Avg part len: {avg_part_len:6.1}, avg jump dist: {avg_jump_dist:6.1}, avg jumps/part: {avg_jumps_per_part:6.2}",
             dur.as_secs_f32(),
             cnt,
                 rate*100.,

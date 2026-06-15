@@ -480,8 +480,8 @@ pub fn jump_index(t: &T) {
 
     eprintln!("Testing mapping");
     jump_index.test_map();
-    eprintln!("Bench PML");
-    jump_index.bench_pml();
+    eprintln!("Bench RLZ");
+    jump_index.bench_rlz();
 
 }
 
