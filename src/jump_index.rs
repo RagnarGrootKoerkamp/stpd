@@ -1,8 +1,9 @@
 use itertools::Itertools;
-use link::Link;
+use link::{Link, LinkEf};
 use mem_dbg::{MemSize, SizeFlags};
 use rayon::prelude::*;
 use std::{
+    hash::{Hash, Hasher},
     marker::ConstParamTy,
     ops::Range,
     sync::atomic::{AtomicUsize, Ordering},
@@ -21,7 +22,7 @@ pub mod storage;
 mod stpd;
 
 /// TODO: LexMin, LexMax, CoLexMin, CoLexMax.
-#[derive(PartialEq, Eq, ConstParamTy, Debug)]
+#[derive(PartialEq, Eq, ConstParamTy, Debug, Hash)]
 pub enum Pi {
     LeftMost,
     RightMost,
@@ -45,13 +46,15 @@ pub struct JumpIndexStats {
     pub cdawg_edges: usize,
 }
 
+type ConstructionOutput = (usize, usize, usize, LinkEf);
+
 impl<'t, const PI: Pi> JumpIndex<'t, PI> {
     /// Take an already-built SA, BWT, and LCP.
     ///
     /// These are AsRef so we can give owned objects and drop them as soon as
     /// they are not needed anymore.
     pub fn new(t: &'t T) -> Self {
-        let (cdawg_nodes, cdawg_edges, root_anchor, ef_links) = Self::compute_links(t);
+        let (cdawg_nodes, cdawg_edges, root_anchor, ef_links) = Self::compute_links_cached(t);
 
         if ef_links.len() < 100 {
             for l in ef_links.iter() {
@@ -132,27 +135,55 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
         }
     }
 
+    pub fn compute_links_cached<'t2>(t: &'t2 T) -> ConstructionOutput {
+        use std::collections::hash_map::DefaultHasher;
+        use std::fs::{self, File};
+        use std::io::{BufReader, BufWriter};
+        use std::path::Path;
+
+        // Hash the input text
+        let mut hasher = DefaultHasher::new();
+        t.hash(&mut hasher);
+        PI.hash(&mut hasher);
+        let hash = hasher.finish();
+
+        // Create cache directory if it doesn't exist
+        let cache_dir = Path::new("_cache");
+        if !cache_dir.exists() {
+            fs::create_dir_all(cache_dir).expect("Failed to create _cache directory");
+        }
+
+        let cache_file = cache_dir.join(format!("{:x}.ji", hash));
+
+        // Try to load from cache
+        if cache_file.exists() {
+            eprintln!("Loading from cache: {:?}", cache_file);
+            let file = File::open(&cache_file).unwrap();
+            let reader = BufReader::new(file);
+            let output = bincode::deserialize_from::<_, ConstructionOutput>(reader).unwrap();
+            return output;
+        }
+
+        // Compute SA and LCP
+        let result = Self::compute_links(t);
+
+        // Write to cache
+        if t.len() > 100_000_000 {
+            eprintln!("Writing to cache: {:?}", cache_file);
+            let file = File::create(&cache_file).unwrap();
+            let writer = BufWriter::new(file);
+            bincode::serialize_into(writer, &result).unwrap();
+        }
+
+        result
+    }
+
     /// Returns:
     /// - #cdawg nodes
     /// - #cdawg edges
     /// - root anchor
     /// - EF-encoded links
-    fn compute_links(
-        t: &'t Vec<u8>,
-    ) -> (
-        usize,
-        usize,
-        usize,
-        EliasFano<
-            u128,
-            sux::prelude::SelectZeroAdaptConst<
-                sux::prelude::BitVec<Box<[usize]>>,
-                Box<[usize]>,
-                12,
-                3,
-            >,
-        >,
-    ) {
+    fn compute_links<'t2>(t: &'t2 Vec<u8>) -> ConstructionOutput {
         let n = t.len();
         let (sa, lcp) = sa_and_lcp_cached(t);
         let bwt = bwt(t, &sa);
