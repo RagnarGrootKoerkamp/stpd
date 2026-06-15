@@ -6,6 +6,7 @@ use std::{
     marker::{ConstParamTy, Sync},
     ops::Range,
 };
+#[allow(unused)]
 use sux::{
     dict::EliasFano,
     traits::{Pred, Succ},
@@ -142,7 +143,12 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
 
             let mut run_start = interval.start;
             for i in interval.clone() {
+                // New run?
                 if i > 0 && bwt.as_ref()[i] != bwt.as_ref()[i - 1] {
+                    run_start = i;
+                }
+                // Same run, but one wraps around the text?
+                if sa.as_ref()[i] == 0 || (i > 0 && sa.as_ref()[i - 1] == 0) {
                     run_start = i;
                 }
 
@@ -205,6 +211,7 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
             .par_array_windows()
             // .array_windows()
             .map(|&[start, end]| {
+                // eprintln!("sa[{start}..{end}]");
                 let mut links = vec![];
                 let mut cdawg_nodes = 0;
                 let mut cdawg_edges = 0;
@@ -258,7 +265,8 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
                         new_anchors.push(link(
                             &anchors[start_idx..end_idx],
                             cur_lcp,
-                            bwt.as_ref()[start..end].iter().all_equal(),
+                            bwt.as_ref()[start..end].iter().all_equal()
+                                && sa.as_ref()[start..end].iter().all(|&x| x != 0),
                             &mut links,
                             &mut cdawg_nodes,
                             &mut cdawg_edges,
@@ -682,7 +690,6 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
     /// Returns the position in the text of the longest prefix of the pattern that matches.
     /// Also returns the total number of jumps.
     pub fn map_jump(&self, pattern: &[u8]) -> (Range<usize>, usize) {
-        // eprintln!("searching for {pattern:?}");
         let mut pos = self.root_anchor;
         let mut jumps = 0;
         for (i, &c) in pattern.iter().enumerate() {
@@ -703,7 +710,6 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
                 return (pos - i..pos, jumps);
             };
             let link = link::Link::from_key(link);
-            // eprintln!("pos {pos} link {link:?}");
             if link.source() == pos && link.c() as u8 == c {
                 // eprintln!("link: {link:?}");
                 jumps += 1;
@@ -842,77 +848,74 @@ mod test {
             (1000, 100, 0.05),
             (10000, 10, 0.05),
         ] {
-            let t = relative(len, 4, repeats, r).1;
-            eprintln!("text: {}", print(&t));
+            for _ in 0..10 {
+                let t = relative(len, 4, repeats, r).1;
+                eprintln!("text: {}", print(&t));
 
-            eprintln!("building for {len}x{repeats} at {r}..");
-            let ji = JumpIndex::<PI>::new(&t);
+                eprintln!("building for {len}x{repeats} at {r}..");
+                let ji = JumpIndex::<PI>::new(&t);
 
-            let maxlen = t.len().min(1000);
-            eprintln!("querying..");
-            for _id in 0..100000 {
-                let len = rand::random_range(0..=maxlen);
+                let maxlen = t.len().min(1000);
+                eprintln!("querying..");
+                for _id in 0..100000 {
+                    let len = rand::random_range(0..=maxlen);
 
-                let pos = rand::random_range(0..=t.len() - len);
-                let pattern = &t[pos..pos + len];
+                    let pos = rand::random_range(0..=t.len() - len);
+                    let pattern = &t[pos..pos + len];
 
-                eprintln!(
-                    "pattern for {PI:?}: T[{pos}..{pos}+{len}] = {}",
-                    print(pattern)
-                );
+                    eprintln!(
+                        "pattern for {PI:?}: T[{pos}..{pos}+{len}] = {}",
+                        print(pattern)
+                    );
 
-                // let s = std::time::Instant::now();
-                // let p1 = ji.map_stpd(pattern);
-                // eprintln!("p1: {p1:?}");
-                // t1 += s.elapsed();
-                let s = std::time::Instant::now();
-                let p2 = ji.map_jump(pattern).0;
-                t2 += s.elapsed();
-                eprintln!("p2: {p2:?}");
-                assert_eq!(p2.len(), len, "Did not match the full pattern!");
+                    // let s = std::time::Instant::now();
+                    // let p1 = ji.map_stpd(pattern);
+                    // eprintln!("p1: {p1:?}");
+                    // t1 += s.elapsed();
+                    let s = std::time::Instant::now();
+                    let p2 = ji.map_jump(pattern).0;
+                    t2 += s.elapsed();
+                    eprintln!("p2: {p2:?}");
+                    assert_eq!(p2.len(), len, "Did not match the full pattern!");
 
-                match PI {
-                    Pi::LeftMost => {
-                        assert!(
-                            p2.start <= pos,
-                            "substring {pos}..{pos}+{len} found at pos {p2:?}"
-                        )
+                    match PI {
+                        Pi::LeftMost => {
+                            assert!(
+                                p2.start <= pos,
+                                "substring {pos}..{pos}+{len} found at pos {p2:?}"
+                            )
+                        }
+                        Pi::RightMost => {
+                            assert!(
+                                p2.start >= pos,
+                                "substring {pos}..{pos}+{len} found at pos {p2:?}"
+                            )
+                        }
                     }
-                    Pi::RightMost => {
-                        assert!(
-                            p2.start >= pos,
-                            "substring {pos}..{pos}+{len} found at pos {p2:?}"
-                        )
+
+                    // let p1 = p1.unwrap();
+                    // let p2 = p2;
+
+                    // assert_eq!(&t[p1..p1 + len], pattern);
+                    if &t[p2.clone()] != pattern {
+                        eprintln!("Pattern T[{pos}..{pos}+{len}] does not match text T[{p2:?}] for JI<{PI:?}>!");
+                        eprintln!("pattern: {}", print(pattern));
+                        eprintln!("text:    {}", print(&t[p2]));
+                        panic!();
                     }
+                    // assert_eq!(p1, p2);
                 }
-
-                // let p1 = p1.unwrap();
-                // let p2 = p2;
-
-                // assert_eq!(&t[p1..p1 + len], pattern);
-                if &t[p2.clone()] != pattern {
-                    eprintln!("Pattern T[{pos}..{pos}+{len}] does not match text T[{p2:?}] for JI<{PI:?}>!");
-                    eprintln!("pattern: {}", print(pattern));
-                    eprintln!("text:    {}", print(&t[p2]));
-                    panic!();
-                }
-                // assert_eq!(p1, p2);
             }
+            // eprintln!("STPD: {t1:?}");
+            eprintln!("JI:   {t2:?}");
         }
-        // eprintln!("STPD: {t1:?}");
-        eprintln!("JI:   {t2:?}");
     }
 
-    /// Error: Missing link for CCA at pos 2.
-    #[test]
-    fn failure_one() {
+    fn test_one(t: &Vec<u8>, pos: usize, len: usize) {
         const PI: Pi = Pi::LeftMost;
-        let t = b"CCBDDACADDCCADDACBDD".to_vec();
         eprintln!("text: {}", print(&t));
 
-        let ji = JumpIndex::<PI>::new(&t);
-        let pos = 10;
-        let len = 9;
+        let ji = JumpIndex::<PI>::new(t);
         let pattern = &t[pos..pos + len];
 
         eprintln!(
@@ -931,6 +934,26 @@ mod test {
             eprintln!("text:    {}", print(&t[p2]));
             panic!();
         }
+    }
+
+    /// Error: Missing link for CCA at pos 2 because CCA and CCB are a BTW-run
+    /// but the character preceding CCB wraps around the text.
+    #[test]
+    fn failure_one() {
+        test_one(&b"CCBDDACADDCCADDACBDD".to_vec(), 10, 9);
+    }
+
+    /// Like failure_one, but the BWT-run for the first character is long and in the DFS2 recursion.
+    #[test]
+    fn failure_two() {
+        test_one(&b"DCACCCABDCDCACCCABDCDCCCCCABAC".to_vec(), 19, 7);
+    }
+
+    /// Like failure_one and failure_two, to catch that both (x, 0) and (0, x)
+    /// are run-breaking in the suffix array.
+    #[test]
+    fn failure_three() {
+        test_one(&b"CCBDDACADDCCADDACBDDCACADDCCADDACBDD".to_vec(), 16, 12);
     }
 }
 
