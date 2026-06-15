@@ -187,10 +187,11 @@ fn stpd_human() {
     // us:     330s for 100 copies of 10 Mbp =>  3.0 Mbp/s  1 thread
 }
 
-fn to_dna(t: &mut Vec<u8>) {
-    for x in t {
+fn to_dna(mut t: Vec<u8>) -> Vec<u8> {
+    for x in &mut t {
         *x = (*x >> 1) & 3;
     }
+    t
 }
 
 fn pizzachili(filter: Option<&str>) -> Vec<(String, T)> {
@@ -214,8 +215,8 @@ fn pizzachili(filter: Option<&str>) -> Vec<(String, T)> {
         .into_iter()
         .map(|e| {
             let name = e.file_name().to_string_lossy().into_owned();
-            let mut data = std::fs::read(e.path()).expect("failed to read file");
-            to_dna(&mut data);
+            let data = std::fs::read(e.path()).expect("failed to read file");
+            let data = to_dna(data);
             (name, data)
         })
         .collect()
