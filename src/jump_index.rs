@@ -3,7 +3,6 @@ use link::Link;
 use mem_dbg::{MemSize, SizeFlags};
 use rayon::prelude::*;
 use std::{
-    cmp::Ordering::{Greater, Less},
     marker::ConstParamTy,
     ops::Range,
     sync::atomic::{AtomicUsize, Ordering},
@@ -15,17 +14,11 @@ use sux::{
 };
 use voracious_radix_sort::RadixSort;
 
-use crate::{
-    bwt, gbs,
-    lcp::Lcp,
-    rmq::{self, Rmq},
-    sa_and_lcp_cached,
-    stpd::cmp_colex,
-    T,
-};
+use crate::{bwt, gbs, lcp::Lcp, sa_and_lcp_cached, T};
 
 mod link;
 pub mod storage;
+mod stpd;
 
 /// TODO: LexMin, LexMax, CoLexMin, CoLexMax.
 #[derive(PartialEq, Eq, ConstParamTy, Debug)]
@@ -36,12 +29,9 @@ pub enum Pi {
 
 pub struct JumpIndex<'t, const PI: Pi> {
     pub t: &'t T,
-    pub stpd_samples: Vec<usize>,
-    pub stpd_pi: Vec<u64>,
-    pub stpd_rmq: rmq::BlockRmq<u64, 64>,
-    // TODO: Predecessor structure
-    pub ef_links: link::LinkEf,
     pub root_anchor: usize,
+    pub ef_links: link::LinkEf,
+
     pub cdawg_nodes: usize,
     pub cdawg_edges: usize,
 }
@@ -133,17 +123,8 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
             eprintln!("Number of (pos,c) with >4 link: {c4}",);
         }
 
-        // Note: replace by the set of all jump targets if needed.
-        // Then, sort co-lex and dedup.
-        // let stpd_pi: Vec<u64> = stpd_samples.iter().map(|&x| pi[x] as u64).collect();
-        let stpd_samples = vec![];
-        let stpd_pi = vec![];
-
         JumpIndex {
             t,
-            stpd_samples,
-            stpd_rmq: rmq::BlockRmq::build(stpd_pi.as_slice()),
-            stpd_pi,
             ef_links,
             root_anchor,
             cdawg_nodes,
@@ -607,63 +588,9 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
 
     pub fn space(&self) {
         eprintln!(
-            "stpd samples {:.3} GB",
-            std::mem::size_of_val(self.stpd_samples.as_slice()) as f32 / 1e9
-        );
-        eprintln!(
-            "stpd pi      {:.3} GB",
-            std::mem::size_of_val(self.stpd_pi.as_slice()) as f32 / 1e9
-        );
-        // eprintln!(
-        //     "stpd rmq     {:.3} GB",
-        //     std::mem::size_of_val(self.stpd_rmq.as_slice()) as f32 / 1e9
-        // );
-        eprintln!(
             "jump index   {:.3} GB",
             mem_dbg::MemSize::mem_size(&self.ef_links, mem_dbg::SizeFlags::default()) as f32 / 1e9
         );
-    }
-
-    /// Returns leftmost text position where the pattern matches.
-    pub fn map_stpd(&self, pattern: &[u8]) -> Option<usize> {
-        let mut pos = 0;
-        for (i, &c) in pattern.iter().enumerate() {
-            if self.t[pos] == c {
-                pos += 1;
-                continue;
-            }
-
-            // TODO: Use binary search function that reuses LCP.
-            let idx1 = self
-                .stpd_samples
-                .binary_search_by(|&sample_pos| {
-                    match cmp_colex(&self.t[..=sample_pos], &pattern[..=i]).1 {
-                        std::cmp::Ordering::Equal => Greater,
-                        x => x,
-                    }
-                })
-                .unwrap_err();
-            let idx2 = self
-                .stpd_samples
-                .binary_search_by(|&sample_pos| {
-                    match cmp_colex(&self.t[..=sample_pos], &pattern[..=i]).1 {
-                        std::cmp::Ordering::Equal => Less,
-                        x => x,
-                    }
-                })
-                .unwrap_err();
-            if idx1 == idx2 {
-                // eprintln!("idx: {idx1}..{idx2}");
-                return None;
-            }
-            let (_val, idx) = self.stpd_rmq.query(self.stpd_pi.as_slice(), idx1, idx2 - 1);
-            // eprintln!("idx: {idx1}..{idx2} => {idx} val={_val}");
-            pos = self.stpd_samples[idx] + 1;
-
-            // eprintln!("pos: {pos}");
-        }
-        // eprintln!("end pos {pos}");
-        Some(pos - pattern.len())
     }
 
     /// Returns the position in the text of the longest prefix of the pattern that matches.
