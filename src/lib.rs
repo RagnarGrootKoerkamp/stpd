@@ -143,10 +143,12 @@ pub fn sa_and_lcp_cached(t: &T) -> (SA, impl Lcp + use<>) {
     let result = sa_and_lcp(t);
     
     // Write to cache
-    eprintln!("Writing to cache: {:?}", cache_file);
-    let file = File::create(&cache_file).unwrap();
-    let writer = BufWriter::new(file);
-    bincode::serialize_into(writer, &result).unwrap();
+    if t.len() > 100_000_000 {
+        eprintln!("Writing to cache: {:?}", cache_file);
+        let file = File::create(&cache_file).unwrap();
+        let writer = BufWriter::new(file);
+        bincode::serialize_into(writer, &result).unwrap();
+    }
 
     result
 }
