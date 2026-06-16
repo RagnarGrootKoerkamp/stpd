@@ -1,5 +1,5 @@
 use itertools::Itertools;
-use link::{Link, LinkEf};
+use link::{Link, LinkEf, SuffixLink, C_BITS};
 use mem_dbg::{MemSize, SizeFlags};
 use rayon::prelude::*;
 use std::{
@@ -31,7 +31,8 @@ pub enum Pi {
 pub struct JumpIndex<'t, const PI: Pi> {
     pub t: &'t T,
     pub root_anchor: usize,
-    pub ef_links: link::LinkEf,
+    pub fwd_links: link::LinkEf,
+    pub suffix_links: link::LinkEf,
 
     pub cdawg_nodes: usize,
     pub cdawg_edges: usize,
@@ -54,34 +55,94 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
     /// These are AsRef so we can give owned objects and drop them as soon as
     /// they are not needed anymore.
     pub fn new(t: &'t T) -> Self {
-        let (cdawg_nodes, cdawg_edges, root_anchor, ef_links) = Self::compute_links_cached(t);
+        let n = t.len();
 
-        if ef_links.len() < 100 {
-            for l in ef_links.iter() {
-                eprintln!("link {:?}", Link::from_key(l));
+
+        let tr = t.iter().rev().copied().collect_vec();
+        let (cdawg_nodes_r, cdawg_edges_r, _root_anchor_r, rev_links) = match PI {
+            Pi::LeftMost => JumpIndex::<'t, { Pi::RightMost }>::compute_links_cached(&tr),
+            Pi::RightMost => JumpIndex::<'t, { Pi::LeftMost }>::compute_links_cached(&tr),
+        };
+        drop(tr);
+
+        eprintln!("reverse POS+ EF: {} GB", gbs(&rev_links));
+
+        eprintln!("Building suffix links..");
+
+        let suffix_links: LinkEf = {
+            eprintln!("Collecting {} links..", rev_links.len());
+            let mut suffix_links = rev_links
+                .into_iter()
+                .map(|x| {
+                    let l = Link::from_key(x);
+                    // eprintln!("Fwd {l:?}");
+                    let mut r_source = n - l.source();
+                    let r_target = n - l.target();
+                    if l.lcp() == 0 {
+                        assert!(r_source == 1);
+                        assert!(r_target > 1);
+                        r_source = 0;
+                    }
+                    // let rl = Link::new(r_source, l.c(), l.lcp(), r_target);
+                    // eprintln!("Rev {rl:?}");
+                    // reverse text direction and swap source and target
+                    SuffixLink::new(r_target, l.lcp(), r_source).key()
+                })
+                .chain(std::iter::once(SuffixLink::new(1, 0, 0).key()))
+                .collect_vec();
+            eprintln!("sorting..");
+            suffix_links.voracious_mt_sort(12);
+            eprintln!("into EF..");
+            let mut ef_builder = sux::dict::elias_fano::EliasFanoBuilder::<u128>::new(
+                suffix_links.len(),
+                *suffix_links.last().unwrap(),
+            );
+            for sl in suffix_links {
+                ef_builder.push(sl);
+            }
+            ef_builder.build_with_dict()
+        };
+
+        eprintln!("Loading fwd jumps");
+
+        let (cdawg_nodes, cdawg_edges, root_anchor, fwd_links) = Self::compute_links_cached(t);
+
+        if fwd_links.len() < 100 {
+            for l in fwd_links.iter() {
+                eprintln!("{:?}", Link::from_key(l));
+            }
+
+            eprintln!();
+
+            for l in suffix_links.iter() {
+                eprintln!("suffix {:?}", SuffixLink::from_key(l));
             }
         }
 
+        eprintln!("CDAWG fwd: n {cdawg_nodes:>10} e {cdawg_edges:>10}");
+        eprintln!("CDAWG rev: n {cdawg_nodes_r:>10} e {cdawg_edges_r:>10}");
+
         eprintln!("---");
-        eprintln!("final EF size: {}", print_ef(&ef_links));
+        eprintln!("final EF  size: {}", print_ef(&fwd_links));
+        eprintln!("final EFr size: {}", print_ef(&rev_links));
         eprintln!("---");
         if false {
             {
                 eprintln!("splitting.. (drop 1 LCP per (source, c))");
-                let (ef_compact, ef_lcp) = link::links_to_compact_ef(&ef_links);
+                let (ef_compact, ef_lcp) = link::links_to_compact_ef(&fwd_links);
                 eprintln!("compact EF size: {}", print_ef(&ef_compact));
                 eprintln!("LCP EF size:     {}", print_ef(&ef_lcp));
             }
             eprintln!("---");
             {
-                let compact_links = link::compactify(&ef_links);
+                let compact_links = link::compactify(&fwd_links);
                 eprintln!("compact EF without LCP: {}", print_ef(&compact_links));
             }
             eprintln!("---");
             #[cfg(feature = "mphf")]
             {
                 eprintln!("MphfStore.. (dropping (source,c) completely)");
-                let store = storage::MphfStore::new(&ef_links);
+                let store = storage::MphfStore::new(&fwd_links);
                 eprintln!("{}", store.size());
                 eprintln!("---");
             }
@@ -89,7 +150,7 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
 
         eprintln!(
             "Max LCP: {}",
-            ef_links
+            fwd_links
                 .iter()
                 .map(|l| Link::from_key(l).lcp())
                 .max()
@@ -98,11 +159,11 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
 
         eprintln!(
             "Average LCP: {:.2}",
-            ef_links
+            fwd_links
                 .iter()
                 .map(|l| Link::from_key(l).lcp())
                 .sum::<usize>() as f32
-                / ef_links.len() as f32
+                / fwd_links.len() as f32
         );
 
         {
@@ -110,7 +171,7 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
             let mut c2 = 0;
             let mut c3 = 0;
             let mut c4 = 0;
-            let chunks = ef_links.iter().chunk_by(|l| {
+            let chunks = fwd_links.iter().chunk_by(|l| {
                 let l = link::Link::from_key(*l);
                 (l.source(), l.c())
             });
@@ -128,7 +189,8 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
 
         JumpIndex {
             t,
-            ef_links,
+            fwd_links,
+            suffix_links,
             root_anchor,
             cdawg_nodes,
             cdawg_edges,
@@ -145,6 +207,7 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
         let mut hasher = DefaultHasher::new();
         t.hash(&mut hasher);
         PI.hash(&mut hasher);
+        C_BITS.hash(&mut hasher);
         let hash = hasher.finish();
 
         // Create cache directory if it doesn't exist
@@ -161,6 +224,7 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
             let file = File::open(&cache_file).unwrap();
             let reader = BufReader::new(file);
             let output = bincode::deserialize_from::<_, ConstructionOutput>(reader).unwrap();
+            eprintln!("Loading from cache done");
             return output;
         }
 
@@ -397,8 +461,8 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
         drop(bwt);
         drop(lcp);
         drop(sa);
-        let ef_links = Self::merge_links(dfs_results);
-        (cdawg_nodes, cdawg_edges, root_anchor, ef_links)
+        let fwd_links = Self::merge_links(dfs_results);
+        (cdawg_nodes, cdawg_edges, root_anchor, fwd_links)
     }
 
     fn merge_links(dfs_results: Vec<EliasFano<u128>>) -> link::LinkEf {
@@ -551,7 +615,7 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
 
     pub fn stats(&self) -> JumpIndexStats {
         let mut stpd_samples: Vec<usize> = self
-            .ef_links
+            .fwd_links
             .iter()
             .map(|l| link::Link::from_key(l).target())
             .collect();
@@ -560,7 +624,7 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
         JumpIndexStats {
             num_sampled: stpd_samples.len(),
             num_sources: 1 + self
-                .ef_links
+                .fwd_links
                 .iter()
                 .tuple_windows()
                 .filter(|&(a, b)| {
@@ -568,7 +632,7 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
                 })
                 .count(),
             num_source_chars: 1 + self
-                .ef_links
+                .fwd_links
                 .iter()
                 .tuple_windows()
                 .filter(|&(a, b)| {
@@ -576,7 +640,7 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
                 })
                 .count(),
             num_links: 1 + self
-                .ef_links
+                .fwd_links
                 .iter()
                 .tuple_windows()
                 .filter(|(a, b)| a != b)
@@ -587,15 +651,15 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
     }
 
     pub fn inspect_links(&self) {
-        eprintln!("Links: {}", self.ef_links.len());
-        if self.ef_links.len() < 10000 {
-            // for i in 0..self.ef_links.len() {
-            //     eprintln!("{i:>8} {:?}", self.ef_links[i]);
+        eprintln!("Links: {}", self.fwd_links.len());
+        if self.fwd_links.len() < 10000 {
+            // for i in 0..self.fwd_links.len() {
+            //     eprintln!("{i:>8} {:?}", self.fwd_links[i]);
             // }
         } else {
-            // for i in (0..self.ef_links.len()).step_by(100000) {
+            // for i in (0..self.fwd_links.len()).step_by(100000) {
             //     for i in i..i + 100 {
-            //         eprintln!("{i:>8} {:?}", self.ef_links[i]);
+            //         eprintln!("{i:>8} {:?}", self.fwd_links[i]);
             //     }
             //     eprintln!("---");
             // }
@@ -620,7 +684,7 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
     pub fn space(&self) {
         eprintln!(
             "jump index   {:.3} GB",
-            mem_dbg::MemSize::mem_size(&self.ef_links, mem_dbg::SizeFlags::default()) as f32 / 1e9
+            mem_dbg::MemSize::mem_size(&self.fwd_links, mem_dbg::SizeFlags::default()) as f32 / 1e9
         );
     }
 
@@ -641,25 +705,17 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
             // }
 
             // find the first link at (pos, c) with LCP >= i.
-            let Some((_idx, link)) = self.ef_links.succ(&link::Link::new(pos, c, i, 0).key())
-            else {
-                // key was larger than last link
-                return (pos - i..pos, jumps);
-            };
-            let link = link::Link::from_key(link);
-            if link.source() == pos && link.c() as u8 == c {
-                // eprintln!("link: {link:?}");
-                jumps += 1;
-                pos = link.target() + 1;
-            } else {
-                // eprintln!("no link found; next is {link:?}");
-                // if let Some((_idx, link)) = self.ef_links.pred(&link::Link::new(pos, c, i, 0).key())
-                // {
-                //     let link = link::Link::from_key(link);
-                //     eprintln!("prev link: {link:?}");
-                // }
-                return (pos - i..pos, jumps);
+            if let Some((_idx, link)) = self.fwd_links.succ(&link::Link::new(pos, c, i, 0).key()) {
+                let link = link::Link::from_key(link);
+                if link.source() == pos && link.c() as u8 == c {
+                    // eprintln!("link: {link:?}");
+                    jumps += 1;
+                    pos = link.target() + 1;
+                    continue;
+                }
             }
+            // no link found for (pos, c)
+            return (pos - i..pos, jumps);
         }
         // eprintln!("Pattern found at {}", pos-pattern.len());
         (pos - pattern.len()..pos, jumps)
@@ -667,6 +723,7 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
 
     /// Relative Lempel-Ziv.
     /// Repeatedly greedily matches a longest prefix of the remaining pattern.
+    /// Return: (#parts, #jumps)
     pub fn map_rlz(&self, pattern: &[u8]) -> (usize, usize) {
         let mut start = 0;
         let mut parts = 0;
@@ -681,9 +738,163 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
         (parts, jumps)
     }
 
+    /// Matching statistics
+    /// Match a longest prefix, then take a suffix link and extend.
+    /// Return (#parts, #jumps, MS)
+    pub fn map_ms_baseline(&self, pattern: &[u8]) -> (usize, usize, Vec<usize>) {
+        let mut parts = 0;
+        let mut jumps = 0;
+        let ms = (0..pattern.len())
+            .map(|i| {
+                let (range, js) = self.map_jump(&pattern[i..]);
+                parts += 1;
+                jumps += js;
+                range.len()
+            })
+            .collect();
+        (parts, jumps, ms)
+    }
+
+    /// Matching statistics
+    /// Match a longest prefix, then take a suffix link and extend.
+    /// Return (#parts, #jumps, #suffix_links, MS)
+    pub fn map_ms(&self, pattern: &[u8]) -> (usize, usize, usize, usize, usize, usize, Vec<usize>) {
+        // eprintln!("\n\nMATCHING STATISTICS FOR\nP: {}", crate::print(pattern));
+        // eprintln!("T: {}", crate::print(self.t));
+        let mut pos = 0;
+        let mut len = 0;
+        let mut parts = 0;
+        let mut suffix_links = 0;
+        let mut suffix_link_lookups = 0;
+        let mut suffix_links_skipped = 0;
+        let mut jumps = 0;
+        let mut jump_lookups = 0;
+        let mut ms = vec![];
+        for (_i, &c) in pattern.iter().enumerate() {
+            let lastlen = len;
+
+            'extend: loop {
+                if pos < self.t.len() && self.t[pos] == c {
+                    pos += 1;
+                    len += 1;
+                    break 'extend;
+                }
+                // if pos < self.t.len() {
+                //     eprintln!("{i}: mismatch at {pos}: got {} wanted {c}", self.t[pos]);
+                // } else {
+                //     eprintln!("{i}: mismatch at {pos}: got end of text wanted {c}",);
+                // }
+
+                // find the first link at (pos, c) with LCP >= len.
+                jump_lookups += 1;
+                if let Some((_idx, link)) =
+                    self.fwd_links.succ(&link::Link::new(pos, c, len, 0).key())
+                {
+                    let link = link::Link::from_key(link);
+                    if link.source() == pos && link.c() as u8 == c {
+                        jumps += 1;
+                        pos = link.target() + 1;
+                        len += 1;
+                        // eprintln!("Found link: {link:?}    old len {lastlen} new len {len}");
+                        break 'extend;
+                    }
+                }
+                // Otherwise, see if there is a (pos, c) link at all and take the longest if so.
+
+                if let Some((_idx, link)) =
+                    self.fwd_links.pred(&link::Link::new(pos, c, len, 0).key())
+                {
+                    let link = link::Link::from_key(link);
+                    if link.source() == pos && link.c() as u8 == c {
+                        jumps += 1;
+                        pos = link.target() + 1;
+                        len = link.lcp() + 1;
+                        // eprintln!("Found link: {link:?}    old len {lastlen} new len {len}");
+                        break 'extend;
+                    }
+                }
+                // We're at pos 0 and can't find a link, so we have a match of len 0.
+                // and a suffix link won't even work.
+                if len == 0 {
+                    assert_eq!(pos, 0);
+                    // eprintln!("Suffix link to T[0..0]");
+                    // eprintln!(
+                    // "Reset to T[0..0]                       old len {lastlen} new len {len}"
+                    // );
+                    // eprintln!(
+                    // "Matched: P[{i}-{len}..{i}] = \"{}\" at T[{pos}-{len}..{pos}]",
+                    // crate::print(&pattern[i - len..i]),
+                    // );
+                    // No fwd link, and can't have suffix link.
+                    // We simply go to the next pattern character.
+                    // ms.push(0);
+                    parts += 1;
+                    break 'extend;
+                }
+                // no link found for (pos, c); follow a suffixlink
+
+                let search_sl = link::SuffixLink::new(pos - (len - 1), len - 1, 0);
+                // eprintln!("Search for sl {search_sl:?}");
+                suffix_link_lookups += 1;
+                let it = self
+                    .suffix_links
+                    .iter_from_succ(&search_sl.key())
+                    .unwrap()
+                    .1;
+
+                for sl in it {
+                    let sl = link::SuffixLink::from_key(sl);
+                    if sl.source() >= pos {
+                        suffix_links_skipped += 1;
+                        break;
+                    }
+                    // TODO: Off-by-1?
+                    if sl.source() + sl.lcp() >= pos {
+                        // TODO: Off-by-1?
+                        len = pos - sl.source();
+                        pos = sl.target() + len;
+                        suffix_links += 1;
+                        // eprintln!(
+                        // "Found SL: {sl:?}     -> new at T[{pos}-{len}..{pos}] = \"{}\"",
+                        // crate::print(&self.t[pos - len..pos])
+                        // );
+                        continue 'extend;
+                    }
+                    suffix_links_skipped += 1;
+                }
+                // Ran out of candidate links??
+                // FIXME: This kinda shouldn't happen???
+                len = 0;
+                pos = 0;
+                parts += 1;
+                continue 'extend;
+            }
+            if len <= lastlen {
+                parts += 1;
+            }
+            for x in (len..=lastlen).rev() {
+                ms.push(x);
+            }
+        }
+        for x in (1..=len).rev() {
+            ms.push(x);
+        }
+        // eprintln!("ms: {ms:?}");
+        assert_eq!(ms.len(), pattern.len());
+        (
+            parts,
+            jumps,
+            jump_lookups,
+            suffix_links,
+            suffix_link_lookups,
+            suffix_links_skipped,
+            ms,
+        )
+    }
+
     /// Take a bunch of random substrings and map them against the text.
     pub fn test_map(&self) {
-        let cnt = 10000000;
+        let cnt = 1000000;
         let len = 1..self.t.len().min(5000);
         for _ in 0..cnt {
             let len = rand::random_range(len.clone());
@@ -714,12 +925,7 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
                 let len = rand::random_range(len.clone());
                 let i = rand::random_range(0..=self.t.len() - len);
                 let j = i + len;
-                let mut pattern = self.t[i..j].to_vec();
-                // randomly permute 1% of values.
-                for _ in 0..(len as f32 * rate) as usize {
-                    let idx = rand::random_range(0..len);
-                    pattern[idx] = (pattern[idx] + rand::random::<u8>() % 3) % 4;
-                }
+                let pattern = mutate_pattern(rate, &self.t[i..j]);
                 patterns.push(pattern);
             }
             let start = std::time::Instant::now();
@@ -745,6 +951,70 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
         );
         }
     }
+
+    /// Take a bunch of random substrings and map them against the text.
+    pub fn bench_ms(&self) {
+        let cnt = 100000;
+        let len = 1..5000.min(self.t.len());
+
+        for rate in [0.01, 0.001] {
+            let mut patterns = vec![];
+            for _it in 0..cnt {
+                let len = rand::random_range(len.clone());
+                let i = rand::random_range(0..=self.t.len() - len);
+                let j = i + len;
+                let pattern = mutate_pattern(rate, &self.t[i..j]);
+                patterns.push(pattern);
+            }
+            let start = std::time::Instant::now();
+            let mut parts = 0;
+            let mut jumps = 0;
+            let mut jump_lookups = 0;
+            let mut suffix_links = 0;
+            let mut suffix_links_lookups = 0;
+            let mut suffix_links_skips = 0;
+            for (_it, pattern) in patterns.iter().enumerate() {
+                let (ps, js, js_lookups, sls, sls_lookup, sls_skip, _ms) = self.map_ms(&pattern);
+                // let (ps, js, _ms) = self.map_ms_baseline(&pattern);
+                parts += ps;
+                jumps += js;
+                jump_lookups += js_lookups;
+                suffix_links += sls;
+                suffix_links_lookups += sls_lookup;
+                suffix_links_skips += sls_skip;
+            }
+            let dur = start.elapsed();
+            let avg_part_len =
+                patterns.iter().map(|p| p.len()).sum::<usize>() as f32 / parts as f32;
+            let avg_jump_dist =
+                patterns.iter().map(|p| p.len()).sum::<usize>() as f32 / jumps as f32;
+            let avg_jumps_per_part = jumps as f32 / parts as f32;
+            let avg_sl_dist =
+                patterns.iter().map(|p| p.len()).sum::<usize>() as f32 / suffix_links as f32;
+            let avg_sl_per_part = suffix_links as f32 / parts as f32;
+            eprintln!(
+                "MS:  {:.3} for {} reads of average length 2500 with {:4.2}% errors. Avg {:6.0} reads/sec. Avg part len: {avg_part_len:6.1}, avg jump dist: {avg_jump_dist:6.1}, avg jumps/part: {avg_jumps_per_part:6.2}, avg suffix-link dist: {avg_sl_dist:6.1}, avg suffix-links/part: {avg_sl_per_part:6.2} (jump lookups/pt: {:6.2}, suffix link lookups/pt: {:6.2}, suffix link skips/pt: {:6.2})",
+            dur.as_secs_f32(),
+            cnt,
+                rate*100.,
+            cnt as f32 / dur.as_secs_f32(),
+                jump_lookups as f32 / parts as f32,
+                suffix_links_lookups as f32 / parts as f32,
+                suffix_links_skips as f32 / parts as f32
+                    
+        );
+        }
+    }
+}
+
+fn mutate_pattern(rate: f32, pattern: &[u8]) -> Vec<u8> {
+    // randomly permute 1% of values.
+    let mut pattern = pattern.to_vec();
+    for _ in 0..(pattern.len() as f32 * rate) as usize {
+        let idx = rand::random_range(0..pattern.len());
+        pattern[idx] = (pattern[idx] + rand::random::<u8>() % 3) % 4;
+    }
+    pattern
 }
 
 fn lcs(a: &[u8], b: &[u8]) -> usize {
@@ -764,14 +1034,12 @@ mod test {
     use crate::strings::relative;
 
     #[test]
-    fn fuzz() {
+    fn fuzz_map() {
         test_direction::<{ Pi::LeftMost }>();
         test_direction::<{ Pi::RightMost }>();
     }
     fn test_direction<const PI: Pi>() {
         eprintln!("--- TESTING {PI:?} ---");
-        // let mut t1 = std::time::Duration::default();
-        let mut t2 = std::time::Duration::default();
         for (len, repeats, r) in [
             (10, 1, 0.1),
             (10, 2, 0.1),
@@ -806,13 +1074,7 @@ mod test {
                         print(pattern)
                     );
 
-                    // let s = std::time::Instant::now();
-                    // let p1 = ji.map_stpd(pattern);
-                    // eprintln!("p1: {p1:?}");
-                    // t1 += s.elapsed();
-                    let s = std::time::Instant::now();
                     let p2 = ji.map_jump(pattern).0;
-                    t2 += s.elapsed();
                     eprintln!("p2: {p2:?}");
                     assert_eq!(p2.len(), len, "Did not match the full pattern!");
 
@@ -831,21 +1093,14 @@ mod test {
                         }
                     }
 
-                    // let p1 = p1.unwrap();
-                    // let p2 = p2;
-
-                    // assert_eq!(&t[p1..p1 + len], pattern);
                     if &t[p2.clone()] != pattern {
                         eprintln!("Pattern T[{pos}..{pos}+{len}] does not match text T[{p2:?}] for JI<{PI:?}>!");
                         eprintln!("pattern: {}", print(pattern));
                         eprintln!("text:    {}", print(&t[p2]));
                         panic!();
                     }
-                    // assert_eq!(p1, p2);
                 }
             }
-            // eprintln!("STPD: {t1:?}");
-            eprintln!("JI:   {t2:?}");
         }
     }
 
@@ -892,6 +1147,105 @@ mod test {
     #[test]
     fn failure_three() {
         test_one(&b"CCBDDACADDCCADDACBDDCACADDCCADDACBDD".to_vec(), 16, 12);
+    }
+
+    #[test]
+    fn fuzz_ms() {
+        for (len, repeats, r, reps) in [
+            (10, 1, 0.1, 100),
+            (10, 2, 0.1, 100),
+            (10, 3, 0.1, 100),
+            (10, 4, 0.1, 100),
+            (10, 10, 0.1, 100),
+            (100, 1, 0.1, 100),
+            (100, 10, 0.1, 10),
+            (100, 100, 0.05, 2),
+            (100, 1000, 0.05, 2),
+            (1000, 100, 0.05, 2),
+            (10000, 10, 0.05, 2),
+        ] {
+            for _ in 0..reps {
+                let t = relative(len, 4, repeats, r).1;
+                eprintln!("text: {}", print(&t));
+
+                eprintln!("building for {len}x{repeats} at {r}..");
+                let ji = JumpIndex::<{ Pi::LeftMost }>::new(&t);
+
+                let maxlen = t.len().min(1000);
+                eprintln!("querying..");
+                for id in 0..10000 {
+                    // FIXME: Include the empty suffix in the suffix array.
+                    let len = rand::random_range(1..=maxlen);
+
+                    let pos = rand::random_range(0..=t.len() - len);
+                    let rate = [0.2, 0.1, 0.05, 0.02, 0.01, 0.005, 0.001][id % 7];
+                    let pattern = mutate_pattern(rate, &t[pos..pos + len]);
+
+                    // eprintln!("pattern: T[{pos}..{pos}+{len}] = {}", print(&pattern));
+
+                    let ms_baseline = ji.map_ms_baseline(&pattern).2;
+                    let ms = ji.map_ms(&pattern).6;
+                    assert_eq!(ms, ms_baseline);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_ef() {
+        let data: Vec<u128> = vec![
+            1170935903,
+            1188950301,
+            1206964700,
+            5818650722,
+            5836665121,
+            10394307940,
+            10412322347,
+            10448351136,
+            10448351144,
+            15005993973,
+            15024008367,
+            15060037165,
+            15060037166,
+            19635694386,
+            19635694387,
+            28859066425,
+            28877080834,
+            28895095223,
+            33506781244,
+            33506781248,
+            42712138878,
+            51953525311,
+            56565211342,
+            61122854161,
+            61176897363,
+            79623641424,
+            84217313048,
+            88792970275,
+            88792970283,
+            88792970287,
+            88828999087,
+            88847013509,
+            98052371097,
+            144169231274,
+            162615975303,
+            176451033444,
+            190268077031,
+            190268077135,
+            204103135163,
+            241014637662,
+            241014637788,
+            250219995329,
+            291707155165,
+            291743183817,
+        ];
+        let val = 43349234048u128;
+        let mut builder = sux::dict::EliasFanoBuilder::new(data.len(), *data.last().unwrap());
+        for x in data {
+            builder.push(x);
+        }
+        let ef = builder.build_with_dict();
+        ef.pred(val);
     }
 }
 

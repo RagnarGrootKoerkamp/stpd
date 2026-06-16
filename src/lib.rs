@@ -25,7 +25,7 @@ pub type LcpElem = u32;
 pub type LCP = Vec<u32>;
 
 pub fn print(t: &[u8]) -> String {
-    if !t.is_empty() &&  t[0] <= 4 {
+    if !t.is_empty() &&  t.iter().all(|x| *x <= 4) {
         String::from_utf8(t.iter().map(|c| b'0' + c).collect_vec()).unwrap()
     } else {
         String::from_utf8(t.to_vec()).unwrap()
@@ -481,8 +481,10 @@ pub fn jump_index(t: &T) {
     // eprint!(" {:>5.2}  | ", cdawg_nodes as f32 / c);
     // eprintln!(" {:>5.2}  | ", cdawg_edges as f32 / c);
 
-    eprintln!("Testing mapping");
-    jump_index.test_map();
+    // eprintln!("Testing mapping");
+    // jump_index.test_map();
+    eprintln!("Bench MS");
+    jump_index.bench_ms();
     eprintln!("Bench RLZ");
     jump_index.bench_rlz();
 

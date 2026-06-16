@@ -19,7 +19,7 @@ pub struct Stpd<'t, const PI: Pi> {
 impl<'t, const PI: Pi> Stpd<'t, PI> {
     pub fn from_jump_index(ji: &JumpIndex<'t, PI>) -> Self {
         let mut stpd_samples: Vec<usize> = ji
-            .ef_links
+            .fwd_links
             .iter()
             .map(|l| link::Link::from_key(l).target())
             .collect();
