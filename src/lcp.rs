@@ -14,9 +14,9 @@ pub trait Lcp: AsRef<Self> + Sync + serde::Serialize + for<'a> serde::Deserializ
 }
 
 /// See https://ae.iti.kit.edu/download/ti_lec11_1.pdf
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub struct PlainLcp {
-    lcp: Vec<u32>,
+    pub lcp: Vec<u32>,
 }
 
 impl AsRef<PlainLcp> for PlainLcp {

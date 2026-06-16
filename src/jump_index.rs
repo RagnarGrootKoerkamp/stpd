@@ -57,7 +57,6 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
     pub fn new(t: &'t T) -> Self {
         let n = t.len();
 
-
         let tr = t.iter().rev().copied().collect_vec();
         let (cdawg_nodes_r, cdawg_edges_r, _root_anchor_r, rev_links) = match PI {
             Pi::LeftMost => JumpIndex::<'t, { Pi::RightMost }>::compute_links_cached(&tr),
@@ -76,19 +75,13 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
                 .map(|x| {
                     let l = Link::from_key(x);
                     // eprintln!("Fwd {l:?}");
-                    let mut r_source = n - l.source();
+                    let r_source = n - l.source();
                     let r_target = n - l.target();
-                    if l.lcp() == 0 {
-                        assert!(r_source == 1);
-                        assert!(r_target > 1);
-                        r_source = 0;
-                    }
                     // let rl = Link::new(r_source, l.c(), l.lcp(), r_target);
                     // eprintln!("Rev {rl:?}");
                     // reverse text direction and swap source and target
                     SuffixLink::new(r_target, l.lcp(), r_source).key()
                 })
-                .chain(std::iter::once(SuffixLink::new(1, 0, 0).key()))
                 .collect_vec();
             eprintln!("sorting..");
             suffix_links.voracious_mt_sort(12);
@@ -349,7 +342,8 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
             // }
         };
         const PREFIX_LCP: u32 = 3;
-        let intervals: Vec<usize> = (0..=n)
+        // The SA is n+1 long.
+        let intervals: Vec<usize> = (0..=n + 1)
             .into_par_iter()
             .filter(|&i| i == 0 || lcp.get(&sa, i - 1) <= PREFIX_LCP)
             .collect();

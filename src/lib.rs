@@ -91,7 +91,7 @@ pub fn sa_and_lcp(t: &T) -> (SA, TheLcp) {
 
     // Shrink types by progressively freeing allocations.
     eprintln!("shrinking..");
-    let sa = shrink_vec(sa, |x| TryInto::<SaElem>::try_into(x).unwrap());
+    let mut sa = shrink_vec(sa, |x| TryInto::<SaElem>::try_into(x).unwrap());
     eprintln!("SA:   {:.3} GB", std::mem::size_of_val(sa.as_slice()) as f32 / 1e9);
     let plcp = shrink_vec(plcp, |x|  TryInto::<LcpElem>::try_into(x).unwrap());
     eprintln!("PLCP: {:.3} GB", std::mem::size_of_val(plcp.as_slice()) as f32 / 1e9);
@@ -105,12 +105,18 @@ pub fn sa_and_lcp(t: &T) -> (SA, TheLcp) {
     // let ef_lcp = EfLcp::new(&sa, &plcp);
     // eprintln!("EfLCP: {:.3} GB", ef_lcp.space() as f32 / 1e9);
 
-    let lcp = TheLcp::new(&sa, &plcp);
+    let mut lcp = TheLcp::new(&sa, &plcp);
     eprintln!("{} LCP: {:.3} GB", std::any::type_name::<TheLcp>(), lcp.space() as f32 / 1e9);
+
+
+    // Insert the empty suffix as smallest SA element.
+    sa.insert(0, t.len() as SaElem);
+    lcp.lcp.insert(0, 0);
+
     (sa, lcp)
 }
 
-pub fn sa_and_lcp_cached(t: &T) -> (SA, impl Lcp + use<>) {
+pub fn sa_and_lcp_cached(t: &T) -> (SA, TheLcp) {
     use std::collections::hash_map::DefaultHasher;
     use std::fs::{self, File};
     use std::io::{BufReader, BufWriter};
