@@ -265,6 +265,7 @@ fn main() {
     // return;
 
     let dataset = std::env::args().nth(1);
+    let relative_len = std::env::args().nth(2).and_then(|x| x.parse().ok());
 
     header();
     let repeated = relative(200, 4, 20, 0.05);
@@ -272,6 +273,7 @@ fn main() {
         // ragc(),
         pizzachili(dataset.as_deref()),
         // vec![("manual".to_string(), b"AGAGCGAGAGCGCGC#".to_vec())],
+        // vec![("manual".to_string(), b"ADBADBDDADDA".to_vec())],
         // variants(fib(15)),
         vec![
             // relative(100, 4, 200, 0.01),
@@ -342,7 +344,7 @@ fn main() {
     .concat();
     for t in texts {
         // stats(&t, false);
-        jump_index(&t.1);
+        jump_index(&t.1, relative_len);
     }
 
     // stats(&random(1000, 2), true);

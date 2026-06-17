@@ -10,6 +10,7 @@ use std::{
     ops::Range,
     sync::atomic::{AtomicUsize, Ordering},
 };
+use storage::RelativeStore;
 use sux::rank_sel::SelectZeroAdaptConst;
 #[allow(unused)]
 use sux::{
@@ -965,7 +966,7 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
                         pos = link.target() + 1;
                         len += 1;
                         // eprintln!(
-                        //     " Use link to jump to T[{pos}-{len}..{pos}] = \"{}\"",
+                        //     " Use link {link:?} to jump to T[{pos}-{len}..{pos}] = \"{}\"",
                         //     crate::print(&t[pos - len..pos])
                         // );
                         break 'extend;
@@ -993,7 +994,7 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
                         pos = link.target() + 1;
                         len = link.lcp() + 1;
                         // eprintln!(
-                        //     " Use INCOMPLETE link to jump to T[{pos}-{len}..{pos}] = \"{}\"",
+                        //     " Use INCOMPLETE {link:?} link to jump to T[{pos}-{len}..{pos}] = \"{}\"",
                         //     crate::print(&t[pos - len..pos])
                         // );
                         break 'extend;
@@ -1055,6 +1056,205 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
 
         eprintln!(
             "=== DYNAMIC CONSTRUCTION IN {:.3} seconds ===",
+            start.elapsed().as_secs_f32()
+        );
+
+        JumpIndex {
+            t,
+            root_anchor: 0,
+            fwd_links,
+            suffix_links,
+            cdawg_nodes: 0,
+            cdawg_edges: 0,
+        }
+    }
+
+    /// NOTE: This is copied from `new_dynamic`.
+    /// Build new Jump Index character by character.
+    /// i: index in text being added
+    /// len: max length of previous occurrence of a suffix T[..i]
+    /// pos<i: leftmost position in text of previous occurrence
+    /// T[pos-len..pos] = T[i-len..i]
+    pub fn new_relative(t: &'t Vec<u8>, relative_len: usize) -> Self {
+        let start = std::time::Instant::now();
+        eprintln!("=== RELATIVE CONSTRUCTION {relative_len} ===");
+        eprintln!("= BASE CASE =");
+        let JumpIndex {
+            fwd_links,
+            mut suffix_links,
+            ..
+        } = Self::new(&t[..relative_len]);
+        {
+            let i = relative_len;
+            let elapsed = start.elapsed().as_secs_f32();
+            eprintln!(
+                "{:>6.1}Mbp {elapsed:>7.2}s {:6.2}Mbp/s fwd links {:>6.1}M = every {:5.1}bp suf links {:>6.1}M = every {:5.1}bp fwd {:>7.2}MB suf {:>7.2}MB",
+                i as f32 / 1000000.,
+                i as f32 / elapsed / 1000000.,
+                fwd_links.len() as f32 / 1000000.,
+                i as f32/ fwd_links.len() as f32 ,
+                suffix_links.len() as f32 / 1000000.,
+                i as f32 / suffix_links.len() as f32 ,
+                0,
+                0,
+            );
+        }
+        eprintln!("= DYNAMIC CASE =");
+        // eprintln!("T: {}", crate::print(t));
+        let last_sl = SuffixLink::from_key(suffix_links.pop().unwrap());
+        // eprintln!("Last SL: {last_sl:?}");
+
+        let mut store = RelativeStore::new(fwd_links, suffix_links);
+
+        let mut pos = last_sl.target() + last_sl.lcp();
+        let mut len = last_sl.lcp();
+        // eprintln!(
+        //     "INIT state T[{pos}-{len}..{pos}] = \"{}\"",
+        //     crate::print(&t[pos - len..pos])
+        // );
+
+        store.insert_suf(link::SuffixLink::new(
+            relative_len - len,
+            longest_common_prefix(&t[pos - len..], &t[relative_len - len..]),
+            pos - len,
+        ));
+
+        for (i, &c) in t.iter().enumerate().skip(relative_len) {
+            if i.count_ones() == 1 && i > 1000000 {
+                let elapsed = start.elapsed().as_secs_f32();
+                let fwd_bytes = 0;
+                // mem_dbg::MemSize::mem_size(&fwd_links, mem_dbg::SizeFlags::default());
+                let suffix_bytes = 0;
+                // mem_dbg::MemSize::mem_size(&suffix_links, mem_dbg::SizeFlags::default());
+                eprintln!(
+                    "{:>6.1}Mbp {elapsed:>7.2}s {:6.2}Mbp/s fwd links {:>6.1}M = every {:5.1}bp suf links {:>6.1}M = every {:5.1}bp fwd {:>7.2}MB suf {:>7.2}MB",
+                    i as f32 / 1000000.,
+                    i as f32 / elapsed / 1000000.,
+                    store.fwd_len() as f32 / 1000000.,
+                    i as f32/ store.fwd_len() as f32 ,
+                    store.suf_len() as f32 / 1000000.,
+                    i as f32 / store.suf_len() as f32 ,
+                    fwd_bytes as f32 / 1000000.,
+                    suffix_bytes as f32 / 1000000.,
+                );
+            }
+
+            // eprintln!(
+            //     "Next char T[{i}] = {}. Current match at T[{pos}-{len}..{pos}] = \"{}\"",
+            //     c as char,
+            //     crate::print(&t[pos - len..pos])
+            // );
+            let lastpos = pos;
+
+            // Try extending by 1 character, either directly or via a forward link.
+            // As long as no link exists, add a new link, and follow a suffix link.
+            // Once a suffix is found where extension is successful, make that
+            // the suffix link of the current position.
+            'extend: loop {
+                if t[pos] == c {
+                    pos += 1;
+                    len += 1;
+                    // let i1 = i + 1;
+                    // eprintln!(
+                    //     "Extend: T[{pos}-{len}..{pos}] = \"{}\" = T[{i1}-{len}..{i1}]",
+                    //     crate::print(&t[pos - len..pos])
+                    // );
+                    break 'extend;
+                }
+                // if pos < self.t.len() {
+                //     eprintln!("{i}: mismatch at {pos}: got {} wanted {c}", self.t[pos]);
+                // } else {
+                //     eprintln!("{i}: mismatch at {pos}: got end of text wanted {c}",);
+                // }
+
+                // find the first link at (pos, c) with LCP >= len.
+                if let Some(link) = store.fwd_succ(link::Link::new(pos, c, len, 0)) {
+                    pos = link.target() + 1;
+                    len += 1;
+                    // eprintln!(
+                    //     " Use link {link:?} to jump to T[{pos}-{len}..{pos}] = \"{}\"",
+                    //     crate::print(&t[pos - len..pos])
+                    // );
+                    break 'extend;
+                }
+                // Otherwise, insert a new link to the current position.
+                let new_link = link::Link::new(pos, c, len, i);
+                store.insert_fwd(new_link);
+                // eprintln!("  Insert {new_link:?}");
+
+                // We're at pos 0 and can't find a link, so we have a match of len 0.
+                // and a suffix link won't even work.
+                if len == 0 {
+                    assert_eq!(pos, 0);
+                    break 'extend;
+                }
+
+                // no link found for (pos, c); follow a shorter fwd link or suffixlink
+
+                if let Some(link) = store.fwd_pred(link::Link::new(pos, c, len, 0)) {
+                    pos = link.target() + 1;
+                    len = link.lcp() + 1;
+                    // eprintln!(
+                    //     " Use INCOMPLETE link {link:?} to jump to T[{pos}-{len}..{pos}] = \"{}\"",
+                    //     crate::print(&t[pos - len..pos])
+                    // );
+                    break 'extend;
+                }
+
+                let search_sl = link::SuffixLink::new(pos - (len - 1), len - 1, 0);
+                // eprintln!(" Search for sl {search_sl:?}");
+                let it = store.suf_iter_from(search_sl);
+
+                for sl in it {
+                    if sl.source() >= pos {
+                        break;
+                    }
+                    if sl.source() + sl.lcp() >= pos {
+                        len = pos - sl.source();
+                        pos = sl.target() + len;
+                        // eprintln!(
+                        //     " Found SL: {sl:?}     -> new at T[{pos}-{len}..{pos}] = \"{}\"",
+                        //     crate::print(&t[pos - len..pos])
+                        // );
+                        continue 'extend;
+                    }
+                }
+
+                // Ran out of candidate links; reset to the start of the string.
+                len = 0;
+                pos = 0;
+                continue 'extend;
+            }
+            let i1 = i + 1;
+            assert!(pos < i1, "pos {pos} i1 {i1}");
+            debug_assert_eq!(
+                &t[pos - len..pos],
+                &t[i1 - len..i1],
+                "Mismatch\nT[{pos}-{len}..{pos}]=\"{}\"\nT[{i1}-{len}..{i1}]=\"{}\"",
+                crate::print(&t[pos - len..pos]),
+                crate::print(&t[i1 - len..i1])
+            );
+            // eprintln!(
+            //     " Current match T[{i1}-{len}..{i1}] = \"{}\" -> T[{pos}-{len}..{pos}] = \"{}\"",
+            //     crate::print(&t[i1 - len..i1]),
+            //     crate::print(&t[pos - len..pos])
+            // );
+            if pos != lastpos + 1 {
+                // Add a suffix link
+                // FIXME: Can we compute/update this on-the-fly?
+                let link_len = longest_common_prefix(&t[pos - len..], &t[i1 - len..]);
+                let new_sl = link::SuffixLink::new(i1 - len, link_len, pos - len);
+                store.insert_suf(new_sl);
+                // eprintln!(
+                //     "  NEW SUFFIX {new_sl:?} for T[{pos}-{len}..{pos}] = \"{}\"",
+                //     crate::print(&t[pos - len..pos])
+                // );
+            }
+        }
+        let (fwd_links, suffix_links) = store.finish();
+
+        eprintln!(
+            "=== RELATIVE CONSTRUCTION IN {:.3} seconds ===",
             start.elapsed().as_secs_f32()
         );
 
@@ -1211,6 +1411,26 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
                 suffix_links_skips as f32 / parts as f32
             );
         }
+    }
+
+    pub fn test_equal(&self, other: &Self) {
+        assert_eq!(
+            self.fwd_links.iter().map(Link::from_key).collect_vec(),
+            other.fwd_links.iter().map(Link::from_key).collect_vec(),
+            "fwd links differ"
+        );
+        assert_eq!(
+            self.suffix_links
+                .iter()
+                .map(SuffixLink::from_key)
+                .collect_vec(),
+            other
+                .suffix_links
+                .iter()
+                .map(SuffixLink::from_key)
+                .collect_vec(),
+            "suf links differ"
+        );
     }
 }
 
@@ -1444,23 +1664,10 @@ mod test {
                 eprintln!("building for {len}x{repeats} at {r}..");
                 let ji1 = JumpIndex::<{ Pi::LeftMost }>::new(&t);
                 let ji2 = JumpIndex::<{ Pi::LeftMost }>::new_dynamic(&t);
+                let ji3 = JumpIndex::<{ Pi::LeftMost }>::new_relative(&t, len);
 
-                assert_eq!(
-                    ji1.fwd_links.iter().map(Link::from_key).collect_vec(),
-                    ji2.fwd_links.iter().map(Link::from_key).collect_vec(),
-                    "fwd links differ"
-                );
-                assert_eq!(
-                    ji1.suffix_links
-                        .iter()
-                        .map(SuffixLink::from_key)
-                        .collect_vec(),
-                    ji2.suffix_links
-                        .iter()
-                        .map(SuffixLink::from_key)
-                        .collect_vec(),
-                    "suffix links differ"
-                );
+                ji1.test_equal(&ji2);
+                ji1.test_equal(&ji3);
             }
         }
     }

@@ -472,8 +472,26 @@ pub fn stpd(t: &T, _sa: &SA, _lcp: &impl Lcp, perm: &Vec<usize>) -> usize {
     sampled.len()
 }
 
-pub fn jump_index(t: &T) {
-    let ji = jump_index::JumpIndex::<{Pi::LeftMost}>::new_dynamic(t);
+pub fn time<T>(name: &str, f: impl FnOnce()-> T) -> T {
+    let start = std::time::Instant::now();
+    let r = f();
+    let duration = start.elapsed();
+    eprintln!("{} took {:?}", name, duration);
+    r
+}
+
+pub fn jump_index(t: &T, relative_len: Option<usize>) {
+    let ji = if let Some(relative_len) = relative_len {
+        let j0 = time("OFFLINE",|| jump_index::JumpIndex::<{Pi::LeftMost}>::new(t));
+        let j1 = time("INCREMENTAL",|| jump_index::JumpIndex::<{Pi::LeftMost}>::new_dynamic(t));
+        let j2 = time("RELATIVE", || jump_index::JumpIndex::<{Pi::LeftMost}>::new_relative(t, relative_len));
+        j1.test_equal(&j2);
+
+        j2
+    } else {
+        jump_index::JumpIndex::<{Pi::LeftMost}>::new_dynamic(t)
+    };
+    return;
     // let ji = jump_index::JumpIndex::<{Pi::LeftMost}>::new(t);
 
     // let JumpIndexStats { num_sampled, num_sources, num_source_chars, num_links, cdawg_nodes, cdawg_edges } = jump_index.stats();
