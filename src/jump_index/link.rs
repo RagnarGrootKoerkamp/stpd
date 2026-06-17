@@ -1,4 +1,5 @@
 use itertools::Itertools;
+use mem_dbg::MemSize;
 use sux::bits::BitVec;
 
 use sux::rank_sel::SelectZeroAdaptConst;
@@ -7,7 +8,8 @@ use sux::dict::{EfDict, EliasFano, EliasFanoBuilder};
 use voracious_radix_sort::RadixSort;
 
 /// t[source-lcp..source] + c == t[target-lcp..=target]
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, MemSize)]
+#[mem_size(flat)]
 pub struct Link {
     data: u128,
     // source: usize,
@@ -17,7 +19,8 @@ pub struct Link {
 }
 
 /// Variant without LCP value, as most (src, c) only have 1 target anyway.
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, MemSize)]
+#[mem_size(flat)]
 pub struct CompactLink {
     data: u128,
     // source: usize,
@@ -28,7 +31,8 @@ pub struct CompactLink {
 /// Suffix links point from the longer to the shorter string.
 /// They do not store 'c=t[source-1]', as this can be inferred anyway.
 /// t[source..source+lcp] == t[target..target+lcp]
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, MemSize)]
+#[mem_size(flat)]
 pub struct SuffixLink {
     data: u128,
     // source: usize,
@@ -158,12 +162,14 @@ pub fn compactify(links: &EfDict<u128>) -> BareEf {
 
 impl std::fmt::Debug for Link {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Link")
-            .field("source", &self.source())
-            .field("c", &self.c())
-            .field("lcp", &self.lcp())
-            .field("target", &self.target())
-            .finish()
+        write!(
+            f,
+            "Link({}->{} {} {})",
+            self.source(),
+            self.target(),
+            self.c() as char,
+            self.lcp()
+        )
     }
 }
 
@@ -201,10 +207,10 @@ impl CompactLink {
 
 impl std::fmt::Debug for CompactLink {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Link")
-            .field("source", &self.source())
-            .field("c", &self.c())
-            .field("target", &self.target())
+        f.debug_struct("CompactLink")
+            .field("s", &self.source())
+            .field("c", &(self.c() as char))
+            .field("t", &self.target())
             .finish()
     }
 }
@@ -249,10 +255,12 @@ impl SuffixLink {
 
 impl std::fmt::Debug for SuffixLink {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Link")
-            .field("source", &self.source())
-            .field("lcp", &self.lcp())
-            .field("target", &self.target())
-            .finish()
+        write!(
+            f,
+            "SufLink({}->{} {})",
+            self.source(),
+            self.target(),
+            self.lcp()
+        )
     }
 }
