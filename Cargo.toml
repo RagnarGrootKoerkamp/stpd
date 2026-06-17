@@ -27,6 +27,8 @@ tiered-vector = "1.0.1"
 voracious_radix_sort = { version = "1.2.0", features = ["voracious_multithread"] }
 prefetch-index = "0.2.0"
 ptr_hash = { version = "2.0.0-alpha.1", path = "../ptr_hash", optional=true }
+merging-iterator = "1.3.0"
+either = "1.16.0"
 
 [features]
 mphf = ["dep:ptr_hash"]

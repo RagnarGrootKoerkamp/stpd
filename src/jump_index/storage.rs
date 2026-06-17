@@ -1,15 +1,22 @@
-#![cfg(feature = "mphf")]
-use std::cmp::max;
+#![allow(unused_imports)]
+use std::{cmp::max, collections::BTreeSet};
 
-use itertools::Itertools;
+use itertools::{Either, Itertools};
 use mem_dbg::MemSize;
+#[cfg(feature = "mphf")]
 use ptr_hash::{hash::FastIntHash, DefaultPtrHash, PtrHash, PtrHashParams};
-use sux::{bits::BitVec, rank_sel::SelectAdaptConst};
+use sux::{
+    bits::BitVec,
+    dict::EliasFanoBuilder,
+    rank_sel::SelectAdaptConst,
+    traits::{Pred, Succ},
+};
 
 use crate::gbs;
 
-use super::link::{BareEf, Link, LinkEf};
+use super::link::{BareEf, Link, LinkEf, SuffixLink};
 
+#[cfg(feature = "mphf")]
 #[derive(MemSize)]
 pub struct MphfStore {
     /// PHF mapping (source, c) to index.
@@ -22,6 +29,7 @@ pub struct MphfStore {
     targets: Vec<u32>,
 }
 
+#[cfg(feature = "mphf")]
 impl MphfStore {
     pub fn new(links: &LinkEf) -> Self {
         let keys: Vec<_> = links
@@ -79,4 +87,94 @@ impl MphfStore {
             gbs(&self.targets)
         )
     }
+}
+
+pub struct RelativeStore {
+    fwd_ef: LinkEf,
+    suf_ef: LinkEf,
+    fwd_set: BTreeSet<u128>,
+    suf_set: BTreeSet<u128>,
+}
+
+impl RelativeStore {
+    pub fn new(fwd_ef: LinkEf, suf_ef: LinkEf) -> Self {
+        Self {
+            fwd_ef,
+            suf_ef,
+            fwd_set: BTreeSet::new(),
+            suf_set: BTreeSet::new(),
+        }
+    }
+    pub fn fwd_len(&self) -> usize {
+        self.fwd_ef.len() + self.fwd_set.len()
+    }
+    pub fn suf_len(&self) -> usize {
+        self.suf_ef.len() + self.suf_set.len()
+    }
+    pub fn insert_fwd(&mut self, link: Link) {
+        self.fwd_set.insert(link.key());
+    }
+    pub fn insert_suf(&mut self, link: SuffixLink) {
+        self.suf_set.insert(link.key());
+    }
+    /// Return the first fwd link >= `link`, but only if it has matching source and character.
+    pub fn fwd_succ(&self, link: Link) -> Option<Link> {
+        let x = link.key();
+        let k1 = self.fwd_ef.succ(x).map(|x| x.1);
+        let k2 = self.fwd_set.range(x..).next().copied();
+        let k = match (k1, k2) {
+            (Some(k1), Some(k2)) => Some(std::cmp::min(k1, k2)),
+            (Some(k1), None) => Some(k1),
+            (None, Some(k2)) => Some(k2),
+            (None, None) => None,
+        }?;
+        let l = Link::from_key(k);
+        if l.source_c() == link.source_c() {
+            Some(l)
+        } else {
+            None
+        }
+    }
+    /// Return the last fwd link <= `link`, but only if it has matching source and character.
+    pub fn fwd_pred(&self, link: Link) -> Option<Link> {
+        let x = link.key();
+        let k1 = self.fwd_ef.pred(x).map(|x| x.1);
+        let k2 = self.fwd_set.range(..=x).next_back().copied();
+        let k = std::cmp::max(k1, k2)?;
+        let l = Link::from_key(k);
+        if l.source_c() == link.source_c() {
+            Some(l)
+        } else {
+            None
+        }
+    }
+    /// Return an iterator over suffix links >= link.
+    pub fn suf_iter_from(&self, link: SuffixLink) -> impl Iterator<Item = SuffixLink> {
+        let x = link.key();
+        let k1 = self
+            .suf_ef
+            .iter_from_succ(x)
+            .map(|x| Either::Left(x.1))
+            .unwrap_or(Either::Right(std::iter::empty()));
+        let k2 = self.suf_set.range(x..).copied();
+        merging_iterator::MergeIter::new(k1, k2).map(SuffixLink::from_key)
+    }
+    pub fn finish(self) -> (LinkEf, LinkEf) {
+        eprintln!("Merging fwd..");
+        let fwd_ef = merge_ef_and_set(self.fwd_ef, self.fwd_set);
+        eprintln!("Merging suf..");
+        let suf_ef = merge_ef_and_set(self.suf_ef, self.suf_set);
+        (fwd_ef, suf_ef)
+    }
+}
+
+fn merge_ef_and_set(ef: LinkEf, set: BTreeSet<u128>) -> LinkEf {
+    let n = ef.len() + set.len();
+    let last = ef.upper_bound().max(set.last().copied().unwrap_or(0));
+    let mut builder = EliasFanoBuilder::new(n, last);
+    for k in merging_iterator::MergeIter::new(ef.into_iter(), set.into_iter()) {
+        builder.push(k);
+    }
+    let fwd_ef = builder.build_with_dict();
+    fwd_ef
 }
