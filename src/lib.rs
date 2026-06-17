@@ -1,4 +1,4 @@
-#![feature(gen_blocks, bstr, vec_from_fn, min_adt_const_params)]
+#![feature(gen_blocks, bstr, vec_from_fn, min_adt_const_params, try_blocks)]
 use std::{cmp::{Reverse}, collections::{HashMap, HashSet}, hash::{Hash, Hasher}};
 use itertools::Itertools;
 use jump_index::{JumpIndexStats, Pi};

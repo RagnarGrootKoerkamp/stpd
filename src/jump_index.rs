@@ -1081,7 +1081,7 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
         eprintln!("= BASE CASE =");
         let JumpIndex {
             fwd_links,
-            mut suffix_links,
+            suffix_links,
             ..
         } = Self::new(&t[..relative_len]);
         eprintln!("= DYNAMIC CASE =");
@@ -1264,12 +1264,12 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
                 ef, fwd_set, suf_set
             );
         }
-        let (fwd_links, suffix_links) = store.finish();
 
         eprintln!(
             "=== RELATIVE CONSTRUCTION IN {:.3} seconds ===",
             start.elapsed().as_secs_f32()
         );
+        let (fwd_links, suffix_links) = store.finish();
 
         JumpIndex {
             t,
@@ -1427,23 +1427,32 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
     }
 
     pub fn test_equal(&self, other: &Self) {
-        assert_eq!(
-            self.fwd_links.iter().map(Link::from_key).collect_vec(),
-            other.fwd_links.iter().map(Link::from_key).collect_vec(),
-            "fwd links differ"
-        );
-        assert_eq!(
-            self.suffix_links
-                .iter()
-                .map(SuffixLink::from_key)
-                .collect_vec(),
-            other
-                .suffix_links
-                .iter()
-                .map(SuffixLink::from_key)
-                .collect_vec(),
-            "suf links differ"
-        );
+        let fwd1 = self.fwd_links.iter().map(Link::from_key).collect_vec();
+        let fwd2 = other.fwd_links.iter().map(Link::from_key).collect_vec();
+        let suf1 = self
+            .suffix_links
+            .iter()
+            .map(SuffixLink::from_key)
+            .collect_vec();
+        let suf2 = other
+            .suffix_links
+            .iter()
+            .map(SuffixLink::from_key)
+            .collect_vec();
+
+        if fwd1 != fwd2 || suf1 != suf2 {
+            eprintln!("fwd1: {fwd1:?}");
+            eprintln!("fwd2: {fwd2:?}");
+            eprintln!("suf1: {suf1:?}");
+            eprintln!("suf2: {suf2:?}");
+            if fwd1 != fwd2 {
+                eprintln!("fwd links differ");
+            }
+            if suf1 != suf2 {
+                eprintln!("suf links differ");
+            }
+            panic!("Links differ!");
+        }
     }
 }
 

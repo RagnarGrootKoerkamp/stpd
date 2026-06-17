@@ -87,6 +87,9 @@ impl Link {
     pub fn source_c(&self) -> usize {
         ((self.key() >> (LCP_BITS + TARGET_BITS)) & ((1 << (SOURCE_BITS + C_BITS)) - 1)) as usize
     }
+    pub fn unpack_source_c(source_c: usize) -> (usize, u8) {
+        (source_c >> C_BITS, (source_c & ((1 << C_BITS) - 1)) as u8)
+    }
     pub fn c(&self) -> u8 {
         ((self.key() >> (LCP_BITS + TARGET_BITS)) & ((1 << C_BITS) - 1)) as u8
     }
