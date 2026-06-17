@@ -18,7 +18,7 @@ use sux::{
 };
 use voracious_radix_sort::RadixSort;
 
-use crate::{bwt, gbs, lcp::Lcp, longest_common_prefix, sa_and_lcp_cached, T};
+use crate::{bwt, gbs, lcp::Lcp, longest_common_prefix, sa_and_lcp_cached};
 
 mod link;
 pub mod storage;
@@ -32,7 +32,7 @@ pub enum Pi {
 }
 
 pub struct JumpIndex<'t, const PI: Pi> {
-    pub t: &'t T,
+    pub t: &'t [u8],
     pub root_anchor: usize,
     pub fwd_links: link::LinkEf,
     pub suffix_links: link::LinkEf,
@@ -57,7 +57,7 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
     ///
     /// These are AsRef so we can give owned objects and drop them as soon as
     /// they are not needed anymore.
-    pub fn new(t: &'t T) -> Self {
+    pub fn new(t: &'t [u8]) -> Self {
         let n = t.len();
 
         let tr = t.iter().rev().copied().collect_vec();
@@ -193,7 +193,7 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
         }
     }
 
-    pub fn compute_links_cached<'t2>(t: &'t2 T) -> ConstructionOutput {
+    pub fn compute_links_cached<'t2>(t: &'t2 [u8]) -> ConstructionOutput {
         use std::collections::hash_map::DefaultHasher;
         use std::fs::{self, File};
         use std::io::{BufReader, BufWriter};
@@ -243,7 +243,7 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
     /// - #cdawg edges
     /// - root anchor
     /// - EF-encoded links
-    fn compute_links<'t2>(t: &'t2 Vec<u8>) -> ConstructionOutput {
+    fn compute_links<'t2>(t: &'t2 [u8]) -> ConstructionOutput {
         let n = t.len();
         let (sa, lcp) = sa_and_lcp_cached(t);
         let bwt = bwt(t, &sa);

@@ -50,8 +50,8 @@ fn shrink_vec<T: Copy + Default>(mut source: Vec<i64>, convert: impl Fn(i64) -> 
     result
 }
 
-pub fn sa(t: &T) -> SA {
-    libsais::SuffixArrayConstruction::for_text(t.as_slice())
+pub fn sa(t: &[u8]) -> SA {
+    libsais::SuffixArrayConstruction::for_text(t)
         .in_owned_buffer64()
         .multi_threaded(libsais::ThreadCount::openmp_default())
         .run()
@@ -63,7 +63,7 @@ pub fn sa(t: &T) -> SA {
 }
 
 #[allow(unused)]
-fn co_sa(t: &T) -> SA {
+fn co_sa(t: &[u8]) -> SA {
     let tr = t.iter().rev().copied().collect_vec();
     let co_sa = sa(&tr);
     co_sa.into_iter().map(|x| t.len() as SaElem - 1 - x ).collect_vec()
@@ -71,9 +71,9 @@ fn co_sa(t: &T) -> SA {
 
 type TheLcp = PlainLcp;
 
-pub fn sa_and_lcp(t: &T) -> (SA, TheLcp) {
+pub fn sa_and_lcp(t: &[u8]) -> (SA, TheLcp) {
     eprintln!("building sa..");
-    let sa_builder = libsais::SuffixArrayConstruction::for_text(t.as_slice())
+    let sa_builder = libsais::SuffixArrayConstruction::for_text(t)
         .in_owned_buffer64()
         .multi_threaded(libsais::ThreadCount::openmp_default())
         .run()
@@ -116,7 +116,7 @@ pub fn sa_and_lcp(t: &T) -> (SA, TheLcp) {
     (sa, lcp)
 }
 
-pub fn sa_and_lcp_cached(t: &T) -> (SA, TheLcp) {
+pub fn sa_and_lcp_cached(t: &[u8]) -> (SA, TheLcp) {
     use std::collections::hash_map::DefaultHasher;
     use std::fs::{self, File};
     use std::io::{BufReader, BufWriter};
@@ -160,14 +160,14 @@ pub fn sa_and_lcp_cached(t: &T) -> (SA, TheLcp) {
     result
 }
 
-pub fn bwt(t: &T, sa: &SA) -> T {
+pub fn bwt(t: &[u8], sa: &SA) -> T {
     sa.par_iter()
         .map(|&i| t[if i == 0 { t.len() - 1 } else { i as usize - 1 }])
         .collect()
 }
 
 /// Number of BWT runs.
-pub fn r(bwt: &T) -> usize {
+pub fn r(bwt: &[u8]) -> usize {
     1 + bwt
         .iter()
         .tuple_windows()
@@ -176,7 +176,7 @@ pub fn r(bwt: &T) -> usize {
 }
 
 /// delta, and maximizing k.
-pub fn delta(t: &T) -> (f32, usize) {
+pub fn delta(t: &[u8]) -> (f32, usize) {
     let mut max = (0.0, 0);
     for k in 1..=t.len() {
         let mut kmers = HashSet::new();

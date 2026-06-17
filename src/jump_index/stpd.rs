@@ -10,7 +10,7 @@ use crate::{
 use super::{link, JumpIndex, Pi};
 
 pub struct Stpd<'t, const PI: Pi> {
-    pub t: &'t T,
+    pub t: &'t [u8],
     pub stpd_samples: Vec<usize>,
     pub stpd_pi: Vec<u64>,
     pub stpd_rmq: rmq::BlockRmq<u64, 64>,
