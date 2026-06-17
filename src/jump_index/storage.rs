@@ -151,13 +151,12 @@ impl RelativeStore {
     /// Return an iterator over suffix links >= link.
     pub fn suf_iter_from(&self, link: SuffixLink) -> impl Iterator<Item = SuffixLink> {
         let x = link.key();
-        let k1 = self
-            .suf_ef
-            .iter_from_succ(x)
-            .map(|x| Either::Left(x.1))
-            .unwrap_or(Either::Right(std::iter::empty()));
-        let k2 = self.suf_set.range(x..).copied();
-        merging_iterator::MergeIter::new(k1, k2).map(SuffixLink::from_key)
+        if x <= self.suf_ef.upper_bound()
+            && let Some((_idx, it)) = self.suf_ef.iter_from_succ(x) {
+            Either::Left(it.chain(self.suf_set.iter().copied()).map(SuffixLink::from_key))
+        } else{
+            Either::Right(self.suf_set.range(x..).copied().map(SuffixLink::from_key))
+        }
     }
     pub fn finish(self) -> (LinkEf, LinkEf) {
         eprintln!("Merging fwd..");
