@@ -94,7 +94,7 @@ pub struct RelativeStore {
     fwd_ef: LinkEf,
     suf_ef: LinkEf,
     fwd_set: BTreeSet<u128>,
-    suf_set: BTreeSet<u128>,
+    suf_set: Vec<u128>,
 }
 
 impl RelativeStore {
@@ -103,7 +103,7 @@ impl RelativeStore {
             fwd_ef,
             suf_ef,
             fwd_set: BTreeSet::new(),
-            suf_set: BTreeSet::new(),
+            suf_set: vec![],
         }
     }
     pub fn fwd_len(&self) -> usize {
@@ -117,9 +117,17 @@ impl RelativeStore {
     }
     pub fn insert_suf(&mut self, link: SuffixLink) {
         let key = link.key();
-        assert!(key > self.suf_ef.upper_bound());
-        assert!(key > self.suf_set.last().copied().unwrap_or(0));
-        self.suf_set.insert(key);
+        if self.suf_set.is_empty() {
+            let last_in_ef = self.suf_ef.iter_back().next().unwrap_or(0);
+            assert!(
+                key >= last_in_ef,
+                "Link {link:?}={key} is not larger than last {:?}={last_in_ef}",
+                SuffixLink::from_key(last_in_ef)
+            );
+        } else {
+            assert!(key > *self.suf_set.last().unwrap());
+        }
+        self.suf_set.push(key);
     }
     /// Return the first fwd link >= `link`, but only if it has matching source and character.
     pub fn fwd_succ(&self, link: Link) -> Option<Link> {
@@ -155,36 +163,56 @@ impl RelativeStore {
     /// Return an iterator over suffix links >= link.
     pub fn suf_iter_from(&self, link: SuffixLink) -> impl Iterator<Item = SuffixLink> {
         let x = link.key();
-        if x <= self.suf_ef.upper_bound()
-            && let Some((_idx, it)) = self.suf_ef.iter_from_succ(x) {
-            Either::Left(it.chain(self.suf_set.iter().copied()).map(SuffixLink::from_key))
-        } else{
-            Either::Right(self.suf_set.range(x..).copied().map(SuffixLink::from_key))
+        if x <= self.suf_ef.upper_bound() {
+            if let Some((_idx, it)) = self.suf_ef.iter_from_succ(x) {
+                return Either::Left(
+                    it.chain(self.suf_set.iter().copied())
+                        .map(SuffixLink::from_key),
+                );
+            }
         }
+        let idx = self.suf_set.binary_search(&x).map_or_else(|x| x, |x| x);
+        Either::Right(
+            self.suf_set[idx..]
+                .iter()
+                .copied()
+                .map(SuffixLink::from_key),
+        )
     }
     // (fwd_ef + suf_ef, fwd_set, suf_set)
     pub fn sizes_gb(&self) -> (f32, f32, f32) {
         (
             gbs(&self.fwd_ef) as f32 + gbs(&self.suf_ef) as f32,
-            gbs(&self.fwd_set) as f32 , gbs(&self.suf_set) as f32,
+            gbs(&self.fwd_set) as f32,
+            gbs(&self.suf_set) as f32,
         )
     }
     pub fn finish(self) -> (LinkEf, LinkEf) {
         eprintln!("Merging fwd..");
-        let fwd_ef = merge_ef_and_set(self.fwd_ef, self.fwd_set);
+        let fwd_ef = merge_fwd(self.fwd_ef, self.fwd_set);
         eprintln!("Merging suf..");
-        let suf_ef = merge_ef_and_set(self.suf_ef, self.suf_set);
+        let suf_ef = merge_suf(self.suf_ef, self.suf_set);
         (fwd_ef, suf_ef)
     }
 }
 
-fn merge_ef_and_set(ef: LinkEf, set: BTreeSet<u128>) -> LinkEf {
+fn merge_fwd(ef: LinkEf, set: BTreeSet<u128>) -> LinkEf {
     let n = ef.len() + set.len();
     let last = ef.upper_bound().max(set.last().copied().unwrap_or(0));
     let mut builder = EliasFanoBuilder::new(n, last);
     for k in merging_iterator::MergeIter::new(ef.into_iter(), set.into_iter()) {
         builder.push(k);
     }
-    let fwd_ef = builder.build_with_dict();
-    fwd_ef
+    builder.build_with_dict()
+}
+
+fn merge_suf(ef: LinkEf, set: Vec<u128>) -> LinkEf {
+    let n = ef.len() + set.len() - 1;
+    let last = ef.upper_bound().max(set.last().copied().unwrap_or(0));
+    let mut builder = EliasFanoBuilder::new(n, last);
+    // Skip the last EF entry, as it is superseeded by the first list entry.
+    for k in ef.into_iter().take(ef.len() - 1).chain(set.into_iter()) {
+        builder.push(k);
+    }
+    builder.build_with_dict()
 }

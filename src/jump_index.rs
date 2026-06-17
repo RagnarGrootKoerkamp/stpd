@@ -1086,7 +1086,7 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
         } = Self::new(&t[..relative_len]);
         eprintln!("= DYNAMIC CASE =");
         // eprintln!("T: {}", crate::print(t));
-        let last_sl = SuffixLink::from_key(suffix_links.pop().unwrap());
+        let last_sl = SuffixLink::from_key(suffix_links.iter_back().next().unwrap());
         // eprintln!("Last SL: {last_sl:?}");
 
         let mut store = RelativeStore::new(fwd_links, suffix_links);
@@ -1113,11 +1113,13 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
         //     crate::print(&t[pos - len..pos])
         // );
 
-        store.insert_suf(link::SuffixLink::new(
+        let new_sl = link::SuffixLink::new(
             relative_len - len,
             longest_common_prefix(&t[pos - len..], &t[relative_len - len..]),
             pos - len,
-        ));
+        );
+        // eprintln!("New sl: {new_sl:?}");
+        store.insert_suf(new_sl);
 
         for (i, &c) in t.iter().enumerate().skip(relative_len) {
             if i.count_ones() == 1 && i > 1000000 {
