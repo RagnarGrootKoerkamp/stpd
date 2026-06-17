@@ -1084,27 +1084,27 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
             mut suffix_links,
             ..
         } = Self::new(&t[..relative_len]);
-        {
-            let i = relative_len;
-            let elapsed = start.elapsed().as_secs_f32();
-            eprintln!(
-                "{:>6.1}Mbp {elapsed:>7.2}s {:6.2}Mbp/s fwd links {:>6.1}M = every {:5.1}bp suf links {:>6.1}M = every {:5.1}bp fwd {:>7.2}MB suf {:>7.2}MB",
-                i as f32 / 1000000.,
-                i as f32 / elapsed / 1000000.,
-                fwd_links.len() as f32 / 1000000.,
-                i as f32/ fwd_links.len() as f32 ,
-                suffix_links.len() as f32 / 1000000.,
-                i as f32 / suffix_links.len() as f32 ,
-                0,
-                0,
-            );
-        }
         eprintln!("= DYNAMIC CASE =");
         // eprintln!("T: {}", crate::print(t));
         let last_sl = SuffixLink::from_key(suffix_links.pop().unwrap());
         // eprintln!("Last SL: {last_sl:?}");
 
         let mut store = RelativeStore::new(fwd_links, suffix_links);
+        {
+            let i = relative_len;
+            let elapsed = start.elapsed().as_secs_f32();
+            let (ef, fwd_set, suf_set) = store.sizes_gb();
+            eprintln!(
+                "{:>6.1}Mbp {elapsed:>7.2}s {:6.2}Mbp/s fwd links {:>6.1}M = every {:5.1}bp suf links {:>6.1}M = every {:5.1}bp size: {:5.3} + {:5.3} + {:5.3} GB",
+                i as f32 / 1000000.,
+                i as f32 / elapsed / 1000000.,
+                store.fwd_len() as f32 / 1000000.,
+                i as f32/ store.fwd_len() as f32 ,
+                store.suf_len() as f32 / 1000000.,
+                i as f32 / store.suf_len() as f32 ,
+                ef, fwd_set, suf_set
+            );
+        }
 
         let mut pos = last_sl.target() + last_sl.lcp();
         let mut len = last_sl.lcp();
@@ -1122,20 +1122,16 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
         for (i, &c) in t.iter().enumerate().skip(relative_len) {
             if i.count_ones() == 1 && i > 1000000 {
                 let elapsed = start.elapsed().as_secs_f32();
-                let fwd_bytes = 0;
-                // mem_dbg::MemSize::mem_size(&fwd_links, mem_dbg::SizeFlags::default());
-                let suffix_bytes = 0;
-                // mem_dbg::MemSize::mem_size(&suffix_links, mem_dbg::SizeFlags::default());
+                let (ef, fwd_set, suf_set) = store.sizes_gb();
                 eprintln!(
-                    "{:>6.1}Mbp {elapsed:>7.2}s {:6.2}Mbp/s fwd links {:>6.1}M = every {:5.1}bp suf links {:>6.1}M = every {:5.1}bp fwd {:>7.2}MB suf {:>7.2}MB",
+                    "{:>6.1}Mbp {elapsed:>7.2}s {:6.2}Mbp/s fwd links {:>6.1}M = every {:5.1}bp suf links {:>6.1}M = every {:5.1}bp size: {:5.3} + {:5.3} + {:5.3} GB",
                     i as f32 / 1000000.,
                     i as f32 / elapsed / 1000000.,
                     store.fwd_len() as f32 / 1000000.,
                     i as f32/ store.fwd_len() as f32 ,
                     store.suf_len() as f32 / 1000000.,
                     i as f32 / store.suf_len() as f32 ,
-                    fwd_bytes as f32 / 1000000.,
-                    suffix_bytes as f32 / 1000000.,
+                ef, fwd_set, suf_set
                 );
             }
 
@@ -1250,6 +1246,21 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
                 //     crate::print(&t[pos - len..pos])
                 // );
             }
+        }
+        {
+            let i = t.len();
+            let elapsed = start.elapsed().as_secs_f32();
+            let (ef, fwd_set, suf_set) = store.sizes_gb();
+            eprintln!(
+                "{:>6.1}Mbp {elapsed:>7.2}s {:6.2}Mbp/s fwd links {:>6.1}M = every {:5.1}bp suf links {:>6.1}M = every {:5.1}bp size: {:5.3} + {:5.3} + {:5.3} GB",
+                i as f32 / 1000000.,
+                i as f32 / elapsed / 1000000.,
+                store.fwd_len() as f32 / 1000000.,
+                i as f32/ store.fwd_len() as f32 ,
+                store.suf_len() as f32 / 1000000.,
+                i as f32 / store.suf_len() as f32 ,
+                ef, fwd_set, suf_set
+            );
         }
         let (fwd_links, suffix_links) = store.finish();
 

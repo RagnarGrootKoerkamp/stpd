@@ -89,6 +89,7 @@ impl MphfStore {
     }
 }
 
+#[derive(MemSize)]
 pub struct RelativeStore {
     fwd_ef: LinkEf,
     suf_ef: LinkEf,
@@ -115,7 +116,10 @@ impl RelativeStore {
         self.fwd_set.insert(link.key());
     }
     pub fn insert_suf(&mut self, link: SuffixLink) {
-        self.suf_set.insert(link.key());
+        let key = link.key();
+        assert!(key > self.suf_ef.upper_bound());
+        assert!(key > self.suf_set.last().copied().unwrap_or(0));
+        self.suf_set.insert(key);
     }
     /// Return the first fwd link >= `link`, but only if it has matching source and character.
     pub fn fwd_succ(&self, link: Link) -> Option<Link> {
@@ -157,6 +161,13 @@ impl RelativeStore {
         } else{
             Either::Right(self.suf_set.range(x..).copied().map(SuffixLink::from_key))
         }
+    }
+    // (fwd_ef + suf_ef, fwd_set, suf_set)
+    pub fn sizes_gb(&self) -> (f32, f32, f32) {
+        (
+            gbs(&self.fwd_ef) as f32 + gbs(&self.suf_ef) as f32,
+            gbs(&self.fwd_set) as f32 , gbs(&self.suf_set) as f32,
+        )
     }
     pub fn finish(self) -> (LinkEf, LinkEf) {
         eprintln!("Merging fwd..");
