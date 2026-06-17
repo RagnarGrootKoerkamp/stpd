@@ -1,13 +1,16 @@
 use itertools::Itertools;
-use link::{Link, LinkEf, SuffixLink, C_BITS};
+use link::{BareEf, Link, LinkEf, SuffixLink, C_BITS};
 use mem_dbg::{MemSize, SizeFlags};
+use rand::seq::IndexedRandom;
 use rayon::prelude::*;
 use std::{
+    collections::BTreeSet,
     hash::{Hash, Hasher},
     marker::ConstParamTy,
     ops::Range,
     sync::atomic::{AtomicUsize, Ordering},
 };
+use sux::rank_sel::SelectZeroAdaptConst;
 #[allow(unused)]
 use sux::{
     dict::EliasFano,
@@ -15,7 +18,7 @@ use sux::{
 };
 use voracious_radix_sort::RadixSort;
 
-use crate::{bwt, gbs, lcp::Lcp, sa_and_lcp_cached, T};
+use crate::{bwt, gbs, lcp::Lcp, longest_common_prefix, sa_and_lcp_cached, T};
 
 mod link;
 pub mod storage;
@@ -476,7 +479,7 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
         const OVERSAMPLING: usize = 100;
         // Oversample 100x to smoothen the distribution.
         let mut pivot_idxs = (0..NUM_PIVOTS * OVERSAMPLING)
-            .map(|_| rand::random_range(0..num_vals))
+            .map(|_| rand::random_range(0..=num_vals))
             .collect_vec();
         pivot_idxs.sort_unstable();
         pivot_idxs.dedup();
@@ -886,6 +889,185 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
         )
     }
 
+    /// Build new Jump Index character by character.
+    /// i: index in text being added
+    /// len: max length of previous occurrence of a suffix T[..i]
+    /// pos<i: leftmost position in text of previous occurrence
+    /// T[pos-len..pos] = T[i-len..i]
+    pub fn new_dynamic(t: &'t Vec<u8>) -> Self {
+        eprintln!("=== DYNAMIC CONSTRUCTION ===");
+        let start = std::time::Instant::now();
+        // eprintln!("T: {}", crate::print(t));
+        let mut fwd_links = BTreeSet::<Link>::new();
+        let mut suffix_links = BTreeSet::<SuffixLink>::new();
+
+        suffix_links.insert(link::SuffixLink::new(
+            1,
+            longest_common_prefix(&t[0..], &t[1..]),
+            0,
+        ));
+
+        // eprintln!("\n\nMATCHING STATISTICS FOR\nP: {}", crate::print(pattern));
+        // eprintln!("T: {}", crate::print(self.t));
+        let mut pos = 0;
+        let mut len = 0;
+        for (i, &c) in t.iter().enumerate().skip(1) {
+            if i.count_ones() == 1 && i > 1000000 {
+                let elapsed = start.elapsed().as_secs_f32();
+                let fwd_bytes =
+                    mem_dbg::MemSize::mem_size(&fwd_links, mem_dbg::SizeFlags::default());
+                let suffix_bytes =
+                    mem_dbg::MemSize::mem_size(&suffix_links, mem_dbg::SizeFlags::default());
+                eprintln!(
+                    "{:>6.1}Mbp {elapsed:>7.2}s {:6.2}Mbp/s fwd links {:>6.1}M = every {:5.1}bp suf links {:>6.1}M = every {:5.1}bp fwd {:>7.2}MB suf {:>7.2}MB",
+                    i as f32 / 1000000.,
+                    i as f32 / elapsed / 1000000.,
+                    fwd_links.len() as f32 / 1000000.,
+                    i as f32/ fwd_links.len() as f32 ,
+                    suffix_links.len() as f32 / 1000000.,
+                    i as f32 / suffix_links.len() as f32 ,
+                    fwd_bytes as f32 / 1000000.,
+                    suffix_bytes as f32 / 1000000.,
+                );
+            }
+
+            // eprintln!(
+            //     "Next char T[{i}] = {}. Current match at T[{pos}-{len}..{pos}] = \"{}\"",
+            //     c as char,
+            //     crate::print(&t[pos - len..pos])
+            // );
+            let lastpos = pos;
+
+            // Try extending by 1 character, either directly or via a forward link.
+            // As long as no link exists, add a new link, and follow a suffix link.
+            // Once a suffix is found where extension is successful, make that
+            // the suffix link of the current position.
+            'extend: loop {
+                if t[pos] == c {
+                    pos += 1;
+                    len += 1;
+                    // let i1 = i + 1;
+                    // eprintln!(
+                    //     "Extend: T[{pos}-{len}..{pos}] = \"{}\" = T[{i1}-{len}..{i1}]",
+                    //     crate::print(&t[pos - len..pos])
+                    // );
+                    break 'extend;
+                }
+                // if pos < self.t.len() {
+                //     eprintln!("{i}: mismatch at {pos}: got {} wanted {c}", self.t[pos]);
+                // } else {
+                //     eprintln!("{i}: mismatch at {pos}: got end of text wanted {c}",);
+                // }
+
+                // find the first link at (pos, c) with LCP >= len.
+                if let Some(&link) = fwd_links.range(link::Link::new(pos, c, len, 0)..).next() {
+                    if link.source() == pos && link.c() as u8 == c {
+                        pos = link.target() + 1;
+                        len += 1;
+                        // eprintln!(
+                        //     " Use link to jump to T[{pos}-{len}..{pos}] = \"{}\"",
+                        //     crate::print(&t[pos - len..pos])
+                        // );
+                        break 'extend;
+                    }
+                }
+                // Otherwise, insert a new link to the current position.
+                let new_link = link::Link::new(pos, c, len, i);
+                fwd_links.insert(new_link);
+                // eprintln!("  Insert {new_link:?}");
+
+                // We're at pos 0 and can't find a link, so we have a match of len 0.
+                // and a suffix link won't even work.
+                if len == 0 {
+                    assert_eq!(pos, 0);
+                    break 'extend;
+                }
+
+                // no link found for (pos, c); follow a shorter fwd link or suffixlink
+
+                if let Some(&link) = fwd_links
+                    .range(..link::Link::new(pos, c, len, 0))
+                    .next_back()
+                {
+                    if link.source() == pos && link.c() as u8 == c {
+                        pos = link.target() + 1;
+                        len = link.lcp() + 1;
+                        // eprintln!(
+                        //     " Use INCOMPLETE link to jump to T[{pos}-{len}..{pos}] = \"{}\"",
+                        //     crate::print(&t[pos - len..pos])
+                        // );
+                        break 'extend;
+                    }
+                }
+
+                let search_sl = link::SuffixLink::new(pos - (len - 1), len - 1, 0);
+                // eprintln!(" Search for sl {search_sl:?}");
+                let it = suffix_links.range(search_sl..);
+
+                for sl in it {
+                    if sl.source() >= pos {
+                        break;
+                    }
+                    if sl.source() + sl.lcp() >= pos {
+                        len = pos - sl.source();
+                        pos = sl.target() + len;
+                        // eprintln!(
+                        //     " Found SL: {sl:?}     -> new at T[{pos}-{len}..{pos}] = \"{}\"",
+                        //     crate::print(&t[pos - len..pos])
+                        // );
+                        continue 'extend;
+                    }
+                }
+
+                // Ran out of candidate links; reset to the start of the string.
+                len = 0;
+                pos = 0;
+                continue 'extend;
+            }
+            let i1 = i + 1;
+            assert!(pos < i1);
+            debug_assert_eq!(
+                &t[pos - len..pos],
+                &t[i1 - len..i1],
+                "Mismatch\nT[{pos}-{len}..{pos}]=\"{}\"\nT[{i1}-{len}..{i1}]=\"{}\"",
+                crate::print(&t[pos - len..pos]),
+                crate::print(&t[i1 - len..i1])
+            );
+            // eprintln!(
+            //     " Current match T[{i1}-{len}..{i1}] = \"{}\" -> T[{pos}-{len}..{pos}] = \"{}\"",
+            //     crate::print(&t[i1 - len..i1]),
+            //     crate::print(&t[pos - len..pos])
+            // );
+            if pos != lastpos + 1 {
+                // Add a suffix link
+                // FIXME: Can we compute/update this on-the-fly?
+                let link_len = longest_common_prefix(&t[pos - len..], &t[i1 - len..]);
+                let new_sl = link::SuffixLink::new(i1 - len, link_len, pos - len);
+                suffix_links.insert(new_sl);
+                // eprintln!(
+                //     "  NEW SUFFIX {new_sl:?} for T[{pos}-{len}..{pos}] = \"{}\"",
+                //     crate::print(&t[pos - len..pos])
+                // );
+            }
+        }
+        let fwd_links = build_ef(fwd_links.into_iter().map(|l| l.key()));
+        let suffix_links = build_ef(suffix_links.into_iter().map(|l| l.key()));
+
+        eprintln!(
+            "=== DYNAMIC CONSTRUCTION IN {:.3} seconds ===",
+            start.elapsed().as_secs_f32()
+        );
+
+        JumpIndex {
+            t,
+            root_anchor: 0,
+            fwd_links,
+            suffix_links,
+            cdawg_nodes: 0,
+            cdawg_edges: 0,
+        }
+    }
+
     /// Take a bunch of random substrings and map them against the text.
     pub fn test_map(&self) {
         let cnt = 1000000;
@@ -947,6 +1129,38 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
     }
 
     /// Take a bunch of random substrings and map them against the text.
+    pub fn test_ms(&self) {
+        let cnt = 1000000;
+        let len = 1..self.t.len().min(5000);
+        for _ in 0..cnt {
+            let rate = *[0.001, 0.01, 0.1].choose(&mut rand::rng()).unwrap();
+            let len = rand::random_range(len.clone());
+            let i = rand::random_range(0..=self.t.len() - len);
+            let j = i + len;
+            let pattern = mutate_pattern(rate, &self.t[i..j]);
+            let (_ps, _js, ms1) = self.map_ms_baseline(&pattern);
+            let (_ps, _js, _js_lookups, _sls, _sls_lookup, _sls_skip, ms2) = self.map_ms(&pattern);
+            assert_eq!(ms1, ms2);
+        }
+    }
+
+    /// Take a bunch of random substrings and map them against the text.
+    pub fn cross_test_ms(&self, other: &Self) {
+        let cnt = 1000000;
+        let len = 1..self.t.len().min(5000);
+        for _ in 0..cnt {
+            let rate = *[0.001, 0.01, 0.1].choose(&mut rand::rng()).unwrap();
+            let len = rand::random_range(len.clone());
+            let i = rand::random_range(0..=self.t.len() - len);
+            let j = i + len;
+            let pattern = mutate_pattern(rate, &self.t[i..j]);
+            let ms1 = other.map_ms(&pattern).6;
+            let ms2 = self.map_ms(&pattern).6;
+            assert_eq!(ms1, ms2);
+        }
+    }
+
+    /// Take a bunch of random substrings and map them against the text.
     pub fn bench_ms(&self) {
         let cnt = 100000;
         let len = 1..5000.min(self.t.len());
@@ -988,17 +1202,22 @@ impl<'t, const PI: Pi> JumpIndex<'t, PI> {
             let avg_sl_per_part = suffix_links as f32 / parts as f32;
             eprintln!(
                 "MS:  {:.3} for {} reads of average length 2500 with {:4.2}% errors. Avg {:6.0} reads/sec. Avg part len: {avg_part_len:6.1}, avg jump dist: {avg_jump_dist:6.1}, avg jumps/part: {avg_jumps_per_part:6.2}, avg suffix-link dist: {avg_sl_dist:6.1}, avg suffix-links/part: {avg_sl_per_part:6.2} (jump lookups/pt: {:6.2}, suffix link lookups/pt: {:6.2}, suffix link skips/pt: {:6.2})",
-            dur.as_secs_f32(),
-            cnt,
+                dur.as_secs_f32(),
+                cnt,
                 rate*100.,
-            cnt as f32 / dur.as_secs_f32(),
+                cnt as f32 / dur.as_secs_f32(),
                 jump_lookups as f32 / parts as f32,
                 suffix_links_lookups as f32 / parts as f32,
                 suffix_links_skips as f32 / parts as f32
-                    
-        );
+            );
         }
     }
+}
+
+fn build_ef(items: impl IntoIterator<Item = u128>) -> LinkEf {
+    let vals = items.into_iter().collect_vec();
+    let ef = BareEf::from(vals);
+    unsafe { ef.map_high_bits(SelectZeroAdaptConst::<_, _, 12, 3>::new) }
 }
 
 fn mutate_pattern(rate: f32, pattern: &[u8]) -> Vec<u8> {
@@ -1186,6 +1405,67 @@ mod test {
     }
 
     #[test]
+    fn fuzz_dynamic_construction() {
+        for (len, repeats, r, reps) in [
+            (3, 1, 0.1, 100),
+            (3, 2, 0.1, 100),
+            (3, 3, 0.1, 100),
+            (3, 4, 0.1, 100),
+            (3, 10, 0.1, 100),
+            (3, 100, 0.1, 100),
+            (3, 1000, 0.1, 100),
+            (10, 1, 0.1, 100),
+            (10, 2, 0.1, 100),
+            (10, 3, 0.1, 100),
+            (10, 4, 0.1, 100),
+            (10, 10, 0.1, 100),
+            (10, 100, 0.1, 100),
+            (10, 100, 0.01, 100),
+            (10, 1000, 0.1, 100),
+            (10, 1000, 0.01, 100),
+            (100, 1, 0.1, 100),
+            (100, 10, 0.1, 100),
+            (100, 100, 0.01, 10),
+            (100, 100, 0.05, 10),
+            (100, 1000, 0.01, 10),
+            (1000, 100, 0.01, 10),
+            (10000, 10, 0.01, 10),
+            (100, 1000, 0.05, 10),
+            (1000, 100, 0.05, 10),
+            (10000, 10, 0.05, 10),
+            (100, 1000, 0.10, 10),
+            (1000, 100, 0.10, 10),
+            (10000, 10, 0.10, 10),
+        ] {
+            for _ in 0..reps {
+                let t = relative(len, 4, repeats, r).1;
+                eprintln!("text: {}", print(&t));
+
+                eprintln!("building for {len}x{repeats} at {r}..");
+                let ji1 = JumpIndex::<{ Pi::LeftMost }>::new(&t);
+                let ji2 = JumpIndex::<{ Pi::LeftMost }>::new_dynamic(&t);
+
+                assert_eq!(
+                    ji1.fwd_links.iter().map(Link::from_key).collect_vec(),
+                    ji2.fwd_links.iter().map(Link::from_key).collect_vec(),
+                    "fwd links differ"
+                );
+                assert_eq!(
+                    ji1.suffix_links
+                        .iter()
+                        .map(SuffixLink::from_key)
+                        .collect_vec(),
+                    ji2.suffix_links
+                        .iter()
+                        .map(SuffixLink::from_key)
+                        .collect_vec(),
+                    "suffix links differ"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn test_ef() {
         let data: Vec<u128> = vec![
             1170935903,
@@ -1251,11 +1531,3 @@ where
     let l = ef.num_lower_bits();
     format!("{:.3} GB : {n} * (2 + {l}) bits", gbs(ef))
 }
-
-// fn build_ef(vals: &[u128]) -> EliasFanoConcurrentBuilder<u64> {
-//     let builder = EliasFanoConcurrentBuilder::new(vals.len(), *vals.last().unwrap());
-//     vals.par_iter().enumerate().for_each(|(i, &v)| {
-//         builder.set(i, v);
-//     });
-//     builder
-// }

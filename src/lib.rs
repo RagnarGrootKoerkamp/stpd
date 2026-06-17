@@ -473,7 +473,8 @@ pub fn stpd(t: &T, _sa: &SA, _lcp: &impl Lcp, perm: &Vec<usize>) -> usize {
 }
 
 pub fn jump_index(t: &T) {
-    let jump_index = jump_index::JumpIndex::<{Pi::LeftMost}>::new(t);
+    let ji = jump_index::JumpIndex::<{Pi::LeftMost}>::new_dynamic(t);
+    // let ji = jump_index::JumpIndex::<{Pi::LeftMost}>::new(t);
 
     // let JumpIndexStats { num_sampled, num_sources, num_source_chars, num_links, cdawg_nodes, cdawg_edges } = jump_index.stats();
 
@@ -487,12 +488,14 @@ pub fn jump_index(t: &T) {
     // eprint!(" {:>5.2}  | ", cdawg_nodes as f32 / c);
     // eprintln!(" {:>5.2}  | ", cdawg_edges as f32 / c);
 
-    // eprintln!("Testing mapping");
-    // jump_index.test_map();
+    eprintln!("Testing mapping");
+    ji.test_map();
+    eprintln!("Testing MS");
+    ji.test_ms();
     eprintln!("Bench MS");
-    jump_index.bench_ms();
+    ji.bench_ms();
     eprintln!("Bench RLZ");
-    jump_index.bench_rlz();
+    ji.bench_rlz();
 
 }
 
